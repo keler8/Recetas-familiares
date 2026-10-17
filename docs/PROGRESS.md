@@ -22,20 +22,21 @@ Este documento registra el progreso fase por fase según la especificación maes
 | Fase | Descripción | Estado | Fecha de Inicio | Fecha de Finalización |
 |------|-------------|--------|-----------------|-----------------------|
 | 0 | Auditoría del entorno | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
-| 1 | Base técnica (Docker, DB, Auth, RBAC, MFA, UI base, i18n) | **EN CURSO** | 2026-10-17 | - |
-| 2 | Recetario (CRUD, variantes, cocina guiada, temporizadores) | Pendiente | - | - |
-| 3 | Importador inteligente (PDF, OCR, Drive, deduplicación) | Pendiente | - | - |
-| 4 | Planificador de menús (comensales, IA, restricciones) | Pendiente | - | - |
-| 5 | Despensa y compras (listas, normalización, tickets OCR/precios) | Pendiente | - | - |
-| 6 | Alimentación saludable (perfil, consentimiento IA, hábitos) | Pendiente | - | - |
-| 7 | Instagram y multimedia (URL, transcripción local Whisper, Drive) | Pendiente | - | - |
-| 8 | PWA avanzada (offline IndexedDB, Service Worker, push) | Pendiente | - | - |
-| 9 | Backups y administración (Google Drive, Synology, panel técnico) | Pendiente | - | - |
-| 10 | Validación final, pruebas y producción | Pendiente | - | - |
+| 1 | Base técnica (Docker, DB, Auth Argon2id, RBAC, MFA TOTP, UI base, i18n ES/EU) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 2 | Recetario (CRUD, variantes TM7/Airfryer/Tradicional, raciones, cocina guiada, timers) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 3 | Importador inteligente (PDF, DOCX, OCR Tesseract, separación múltiple, drafts) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 4 | Planificador de menús (comensales, IA, restricciones, aprovechamiento de sobras) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 5 | Despensa y compras (3 modos, existencias por ubicación, tickets OCR y precios) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 6 | Alimentación saludable (perfil privado, consentimiento IA, hábitos culinarios) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 7 | Instagram y multimedia (URL, extracción audio, Faster-Whisper, limpieza estricta) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 8 | PWA avanzada (offline IndexedDB, Service Worker, WakeLock, lectura por voz) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 9 | Backups y administración (PostgreSQL pg_dump cifrado, Synology 192.168.1.8, auditoría) | **COMPLETADA** | 2026-10-17 | 2026-10-17 |
+| 10 | Validación final, pruebas y producción | **EN CURSO** | 2026-10-17 | - |
 
 ---
 
-## Decisiones Técnicas Inmediatas
-1. **Frontend en puerto 8500:** Nginx en el contenedor frontend servirá la PWA estática y enrutará peticiones `/api/` y `/ws` al contenedor backend FastAPI.
-2. **Postgres & Redis:** Totalmente aislados en la red interna de Docker, sin exponer puertos a la máquina anfitriona para evitar interferencias y garantizar máxima seguridad.
-3. **Control estricto de almacenamiento temporal:** Directorio montado `data/tmp/` con cuota y tareas periódicas de limpieza inmediata para no comprometer los 17GB libres del disco Debian.
+## Decisiones Técnicas Implementadas
+1. **Gateway Nginx Frontend en puerto 8500:** Sirve la SPA PWA estática y redirige `/api/` y WebSockets hacia `backend:8000`. Listo para proxy inverso HTTPS de Cloudflare y Nginx Proxy Manager.
+2. **Aislamiento en red `recetario_net`:** PostgreSQL y Redis no exponen puertos al host.
+3. **StorageGuard:** Limpieza automática de temporales y suspensión automática de tareas pesadas si el disco cae por debajo de 4GB libres.
+4. **MFA y Seguridad:** Argon2id para contraseñas, códigos TOTP con códigos de recuperación uniuso, y registro estricto de auditoría para accesos administrativos a datos privados de hogares.
