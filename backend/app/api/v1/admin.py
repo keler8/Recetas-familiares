@@ -8,6 +8,7 @@ from app.models.auth import User, AuditLog, Invitation
 from app.models.household import Household
 from app.models.recipe import Recipe
 from app.models.import_job import ImportBatch
+from app.models.system import SystemSetting
 from app.schemas.auth import UserCreate, UserResponse, UserUpdate
 from app.api.deps import get_current_admin
 from app.services.auth_service import auth_service
@@ -211,3 +212,41 @@ def trigger_storage_cleanup(
 ):
     deleted = storage_guard.cleanup_old_temp_files(max_age_seconds=0)  # clean all temp files
     return {"message": f"Limpieza completada. {deleted} archivos/directorios temporales eliminados."}
+
+
+# Recipe & Tags Customization
+@router.get("/recipe-config")
+def get_admin_recipe_config(
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    from app.api.v1.recipes import DEFAULT_RECIPE_CONFIG
+    import json
+    setting = db.query(SystemSetting).filter(SystemSetting.key == "recipe_config").first()
+    if setting and setting.value:
+        try:
+            return json.loads(setting.value)
+        except Exception:
+            pass
+    return DEFAULT_RECIPE_CONFIG
+
+
+@router.put("/recipe-config")
+def update_admin_recipe_config(
+    config_in: Dict[str, Any],
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    import json
+    setting = db.query(SystemSetting).filter(SystemSetting.key == "recipe_config").first()
+    if not setting:
+        setting = SystemSetting(
+            key="recipe_config",
+            description="Configuración global de momentos de comida y etiquetas de recetas"
+        )
+        db.add(setting)
+
+    setting.value = json.dumps(config_in, ensure_ascii=False)
+    db.commit()
+    return {"message": "Configuración de recetas y etiquetas actualizada con éxito", "config": config_in}
+

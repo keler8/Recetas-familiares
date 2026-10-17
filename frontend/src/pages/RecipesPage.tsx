@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Search, Filter, Plus, Heart, Clock, Star,
-  Sparkles, ChefHat, Flame, ShieldAlert
+  Sparkles, ChefHat, Flame, ShieldAlert, Tag,
+  Utensils, Sun, Coffee, Apple
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -14,8 +15,16 @@ export const RecipesPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedAppliance, setSelectedAppliance] = useState<string>('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [selectedMealType, setSelectedMealType] = useState<string>('');
+  const [selectedTag, setSelectedTag] = useState<string>('');
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [config, setConfig] = useState<any>({ meal_types: [], tags: [] });
+
+  useEffect(() => {
+    apiRequest('/recipes/config').then(data => {
+      if (data) setConfig(data);
+    }).catch(err => console.warn('Config fetch error:', err));
+  }, []);
 
   const fetchRecipes = async () => {
     setLoading(true);
@@ -23,7 +32,8 @@ export const RecipesPage: React.FC = () => {
       const params = new URLSearchParams();
       if (search) params.append('search', search);
       if (selectedAppliance) params.append('appliance', selectedAppliance);
-      if (selectedCategory) params.append('category', selectedCategory);
+      if (selectedMealType) params.append('meal_type', selectedMealType);
+      if (selectedTag) params.append('tag', selectedTag);
       if (favoritesOnly) params.append('favorites_only', 'true');
 
       const data = await apiRequest(`/recipes?${params.toString()}`);
@@ -43,7 +53,7 @@ export const RecipesPage: React.FC = () => {
       fetchRecipes();
     }, 250);
     return () => clearTimeout(timer);
-  }, [search, selectedAppliance, selectedCategory, favoritesOnly]);
+  }, [search, selectedAppliance, selectedMealType, selectedTag, favoritesOnly]);
 
   const toggleFav = async (e: React.MouseEvent, recipeId: number) => {
     e.preventDefault();
@@ -63,17 +73,29 @@ export const RecipesPage: React.FC = () => {
     { id: 'Tradicional', label: 'Tradicional' }
   ];
 
-  const categories = [
-    'Comidas', 'Cenas', 'Platos principales', 'Entrantes', 'Postres', 'Desayunos'
+  const mealTypes = config.meal_types?.length > 0 ? config.meal_types : [
+    { id: '', label: 'Cualquier momento' },
+    { id: 'desayuno', label: 'Desayuno' },
+    { id: 'almuerzo_merienda', label: 'Almuerzo / Merienda' },
+    { id: 'comida_cena', label: 'Comida / Cena' },
+    { id: 'snacks', label: 'Snacks / Picoteo' }
+  ];
+
+  const tags = config.tags?.length > 0 ? config.tags : [
+    { id: 'saludable', label: 'Saludable' },
+    { id: 'mas_usada', label: 'Más usada' },
+    { id: 'top_receta', label: 'Top receta ⭐' },
+    { id: 'rapida', label: 'Rápida (<25m)' },
+    { id: 'facil', label: 'Fácil' }
   ];
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6 animate-in fade-in">
       {/* Top action header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black text-white tracking-tight">{t('recipes')}</h1>
-          <p className="text-xs text-zinc-400 mt-0.5">Biblioteca compartida de recetas familiares</p>
+          <p className="text-xs text-zinc-400 mt-0.5">Biblioteca compartida con filtros por momento del día, electrodoméstico y etiquetas</p>
         </div>
         <div className="flex items-center gap-2">
           <Link
@@ -100,7 +122,7 @@ export const RecipesPage: React.FC = () => {
           />
         </div>
 
-        {/* Filter Pills */}
+        {/* Appliance & Favorite Pills */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs scrollbar-none">
           {appliances.map(app => (
             <button
@@ -127,6 +149,54 @@ export const RecipesPage: React.FC = () => {
             <Heart className={`w-3.5 h-3.5 ${favoritesOnly ? 'fill-white' : ''}`} />
             <span>{t('favorites')}</span>
           </button>
+        </div>
+
+        {/* Meal Type Pills (Desayuno, Comida/Cena, Almuerzo/Merienda, Snacks) */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs scrollbar-none">
+          <button
+            onClick={() => setSelectedMealType('')}
+            className={`px-2.5 py-1 rounded-xl whitespace-nowrap text-[11px] transition-colors border ${
+              selectedMealType === ''
+                ? 'bg-zinc-800 text-white font-bold border-zinc-700'
+                : 'bg-zinc-950 text-zinc-500 border-zinc-800/80 hover:text-zinc-300'
+            }`}
+          >
+            Todos los momentos
+          </button>
+          {mealTypes.filter((m: any) => m.id).map((m: any) => (
+            <button
+              key={m.id}
+              onClick={() => setSelectedMealType(selectedMealType === m.id ? '' : m.id)}
+              className={`px-2.5 py-1 rounded-xl whitespace-nowrap text-[11px] transition-colors border ${
+                selectedMealType === m.id
+                  ? 'bg-amber-500/20 text-amber-300 font-bold border-amber-500/50'
+                  : 'bg-zinc-950 text-zinc-400 border-zinc-800/80 hover:border-zinc-700'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tags Pills (Saludable, Más usada, Top Receta, Rápida, Fácil) */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs scrollbar-none">
+          <span className="text-[11px] text-zinc-500 font-semibold shrink-0 flex items-center gap-1 pl-1">
+            <Tag className="w-3 h-3" />
+            Etiquetas:
+          </span>
+          {tags.map((tg: any) => (
+            <button
+              key={tg.id}
+              onClick={() => setSelectedTag(selectedTag === tg.id ? '' : tg.id)}
+              className={`px-2.5 py-0.5 rounded-lg whitespace-nowrap text-[11px] transition-all border ${
+                selectedTag === tg.id
+                  ? 'bg-emerald-500/20 text-emerald-300 font-bold border-emerald-500/50 shadow-sm'
+                  : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+              }`}
+            >
+              {tg.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -156,10 +226,17 @@ export const RecipesPage: React.FC = () => {
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-transparent to-transparent opacity-80" />
 
+                {/* Meal Type Tag Badge */}
+                {recipe.meal_type && (
+                  <span className="absolute top-2.5 left-2.5 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-black/75 backdrop-blur-md text-amber-400 border border-white/10">
+                    {recipe.meal_type === 'desayuno' ? 'Desayuno' : recipe.meal_type === 'snacks' ? 'Snack' : recipe.meal_type === 'almuerzo_merienda' ? 'Almuerzo' : 'Comida/Cena'}
+                  </span>
+                )}
+
                 {/* Favorite Heart Button */}
                 <button
                   onClick={(e) => toggleFav(e, recipe.id)}
-                  className="absolute top-3 right-3 w-8 h-8 rounded-full bg-zinc-950/60 backdrop-blur-md flex items-center justify-center text-white hover:scale-110 transition-transform"
+                  className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-zinc-950/60 backdrop-blur-md flex items-center justify-center text-white hover:scale-110 transition-transform"
                 >
                   <Heart className={`w-4 h-4 ${recipe.is_favorite ? 'text-rose-500 fill-rose-500' : 'text-zinc-300'}`} />
                 </button>
@@ -179,7 +256,7 @@ export const RecipesPage: React.FC = () => {
               </div>
 
               {/* Recipe Details */}
-              <div className="p-4 flex flex-col flex-1 justify-between">
+              <div className="p-4 flex flex-col flex-1 justify-between space-y-3">
                 <div>
                   <h3 className="text-base font-bold text-white group-hover:text-amber-400 transition-colors line-clamp-1">
                     {recipe.title}
@@ -189,18 +266,38 @@ export const RecipesPage: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-400">
+                {/* Tags badges */}
+                {recipe.tags && recipe.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {recipe.tags.map((t: string, i: number) => {
+                      const isHealthy = t.toLowerCase().includes('saludable');
+                      const isTop = t.toLowerCase().includes('top');
+                      return (
+                        <span
+                          key={i}
+                          className={`text-[10px] px-2 py-0.5 rounded-md font-semibold ${
+                            isHealthy
+                              ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                              : isTop
+                              ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                              : 'bg-zinc-800 text-zinc-300'
+                          }`}
+                        >
+                          {t}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-400">
                   <div className="flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-amber-400" />
                     <span>{recipe.total_time_min} min</span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    {recipe.tags && recipe.tags.slice(0, 2).map((t: string, i: number) => (
-                      <span key={i} className="text-[10px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">
-                        {t}
-                      </span>
-                    ))}
-                  </div>
+                  <span className="text-[11px] text-zinc-500">
+                    {recipe.variants?.length || 1} {recipe.variants?.length === 1 ? 'modo' : 'modos de cocina'}
+                  </span>
                 </div>
               </div>
             </Link>

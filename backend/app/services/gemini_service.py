@@ -419,5 +419,122 @@ class GeminiService:
             })
         return result
 
+    def generate_dietary_advice_and_recipe_modifications(
+        self,
+        dietary_goals: str,
+        user_query: str,
+        recipe: Optional[Dict[str, Any]] = None,
+        preferred_foods: Optional[str] = None,
+        excluded_foods: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Acts as an intelligent dietary and healthy culinary assistant.
+        Recommends healthy adjustments, ingredient substitutions, or generates adapted healthy recipes.
+        """
+        if self.is_configured():
+            try:
+                client = self._get_client()
+                if client:
+                    recipe_context = ""
+                    if recipe:
+                        recipe_context = (
+                            f"\nReceta base a analizar o modificar:\n"
+                            f"Título: {recipe.get('title')}\n"
+                            f"Ingredientes: {json.dumps(recipe.get('ingredients', []), ensure_ascii=False)}\n"
+                            f"Pasos: {json.dumps(recipe.get('steps', []), ensure_ascii=False)}\n"
+                        )
+
+                    prompt = (
+                        "Actúa como un Asistente Dietético y Culinario Familiar altamente cualificado. "
+                        "Tu función es ayudar a la familia a comer de forma más saludable, adaptando o recomendando recetas.\n"
+                        f"Perfil dietético del hogar: {dietary_goals or 'Dieta mediterránea equilibrada'}\n"
+                        f"Alimentos preferidos: {preferred_foods or 'No especificado'}\n"
+                        f"Alimentos a evitar / intolerancias: {excluded_foods or 'Ninguno'}\n"
+                        f"{recipe_context}\n"
+                        f"Petición del usuario: {user_query}\n\n"
+                        "Responde ÚNICAMENTE en formato JSON con la siguiente estructura:\n"
+                        "{\n"
+                        '  "advice": "Explicación clara, empática y práctica con tips culinarios saludables.",\n'
+                        '  "suggested_modifications": ["Sustitución o ajuste 1", "Sustitución o ajuste 2"],\n'
+                        '  "healthy_recipe_variant": null o un objeto con {"title": "string", "description": "string", "prep_time_min": 15, "cook_time_min": 20, "ingredients": [{"name": "string", "amount": 100, "unit": "g"}], "steps": [{"step_number": 1, "instruction": "string"}]}\n'
+                        "}"
+                    )
+                    response = client.models.generate_content(
+                        model=self.model_name,
+                        contents=prompt,
+                        config={"response_mime_type": "application/json"}
+                    )
+                    return json.loads(response.text)
+            except Exception as e:
+                logger.error(f"Gemini dietary advice failed, falling back to heuristic: {e}")
+
+        return self._heuristic_dietary_advice(dietary_goals, user_query, recipe, preferred_foods, excluded_foods)
+
+    def _heuristic_dietary_advice(
+        self,
+        dietary_goals: str,
+        user_query: str,
+        recipe: Optional[Dict[str, Any]] = None,
+        preferred_foods: Optional[str] = None,
+        excluded_foods: Optional[str] = None
+    ) -> Dict[str, Any]:
+        query_lower = (user_query or "").lower()
+        goals_lower = (dietary_goals or "").lower()
+
+        swaps = []
+        advice_points = []
+
+        # Analyze healthy goals
+        if "antiinflamatori" in goals_lower or "antiinflamatori" in query_lower:
+            advice_points.append("Incorpora fuentes ricas en Omega-3 (pescado azul, nueces, semillas de lino) y especias antiinflamatorias como cúrcuma con pimienta negra y jengibre.")
+            swaps.append("Sustituye aceites refinados por Aceite de Oliva Virgen Extra prensado en frío.")
+        if "sal" in goals_lower or "hipertension" in goals_lower or "sal" in query_lower:
+            advice_points.append("Para reducir el sodio sin perder sabor, potencia el uso de hierbas aromáticas (orégano, albahaca, romero), ajo asado y ralladura de cítricos.")
+            swaps.append("Reemplaza la sal refinada por mezcla de especias y zumo de limón.")
+        if "keto" in goals_lower or "carbohidrat" in goals_lower or "baja en hidratos" in query_lower:
+            advice_points.append("Prioriza vegetales de hoja verde y crucíferas sobre tubérculos y cereales refinados.")
+            swaps.append("Cambia arroz tradicional o pasta por arroz de coliflor o fideos de calabacín.")
+        if "gluten" in goals_lower or "celiac" in goals_lower:
+            swaps.append("Usa harina de avena certificada sin gluten o harina de almendras para rebozados y espesantes.")
+        if "lactosa" in goals_lower:
+            swaps.append("Sustituye nata o quesos cremosos por bebida de coco, puré de anacardos o yogur vegetal sin azúcares.")
+
+        if not swaps:
+            swaps = [
+                "Reduce grasas saturadas cocinando en Airfryer (180°C con pulverización de AOVE) en lugar de fritura por inmersión.",
+                "Aumenta la fibra añadiendo un 50% de vegetales troceados a la base del plato.",
+                "Sustituye natas y salsas pesadas por leche evaporada o yogur griego natural desnatado."
+            ]
+
+        advice_text = (
+            f"Como tu Asistente Dietético Familiar, he analizado tu consulta orientada a: {dietary_goals or 'Alimentación saludable familiar'}.\n\n"
+            + (" ".join(advice_points) + "\n\n" if advice_points else "")
+            + "Recomendación culinaria clave:\n"
+            + "Ajustar las técnicas de cocción al vapor (Thermomix Varoma) y aire caliente (Airfryer) preserva los micronutrientes y reduce la densidad calórica sin sacrificar el sabor familiar."
+        )
+
+        healthy_variant = None
+        if recipe:
+            healthy_variant = {
+                "title": f"{recipe.get('title', 'Receta')} (Versión Saludable)",
+                "description": f"Adaptación nutricional ligera optimizada para {dietary_goals or 'una alimentación equilibrada'}.",
+                "prep_time_min": recipe.get("prep_time_min", 15),
+                "cook_time_min": recipe.get("cook_time_min", 20),
+                "ingredients": [
+                    {"name": ing.get("name"), "amount": ing.get("amount"), "unit": ing.get("unit")}
+                    for ing in recipe.get("ingredients", [])
+                ],
+                "steps": [
+                    {"step_number": s.get("step_number", idx + 1), "instruction": s.get("instruction")}
+                    for idx, s in enumerate(recipe.get("steps", []))
+                ]
+            }
+
+        return {
+            "advice": advice_text,
+            "suggested_modifications": swaps,
+            "healthy_recipe_variant": healthy_variant
+        }
+
 
 gemini_service = GeminiService()

@@ -17,7 +17,8 @@ class Recipe(Base):
     
     # Classification
     categories = Column(Text, nullable=True)  # JSON list of strings (e.g. ["Comidas", "Platos principales"])
-    tags = Column(Text, nullable=True)  # JSON list of strings (e.g. ["Sin gluten", "Rápido"])
+    tags = Column(Text, nullable=True)  # JSON list of strings (e.g. ["saludable", "mas_usada", "top_receta", "rapida", "facil"])
+    meal_type = Column(String(100), default="comida_cena", nullable=True)  # desayuno, almuerzo_merienda, comida_cena, snacks
     dish_type = Column(String(100), nullable=True)  # Entrante, Principal, Postre, etc.
     cuisine = Column(String(100), nullable=True)  # Mediterránea, Vasca, Asiática, etc.
     

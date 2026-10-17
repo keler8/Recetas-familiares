@@ -1,8 +1,8 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { LanguageProvider } from './context/LanguageContext';
 import { ThemeProvider } from './context/ThemeContext';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { HouseholdProvider } from './context/HouseholdContext';
 import { Navbar } from './components/Navbar';
 import { BottomNav } from './components/BottomNav';
@@ -22,9 +22,49 @@ import { NutritionPage } from './pages/NutritionPage';
 import { AdminPage } from './pages/AdminPage';
 import { LoginPage } from './pages/LoginPage';
 
+const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, loading } = useAuth();
+  const token = localStorage.getItem('token');
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-zinc-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm">Iniciando sesión segura...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user && !token) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+};
+
+const PublicLoginRoute: React.FC = () => {
+  const { user, loading } = useAuth();
+  const token = localStorage.getItem('token');
+
+  if (!loading && (user || token)) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <LoginPage />;
+};
+
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
+  const { user } = useAuth();
+  const token = localStorage.getItem('token');
+  const isLoginPage = location.pathname === '/login';
   const isCookingMode = location.pathname.includes('/cook');
+
+  if (isLoginPage || (!user && !token)) {
+    return <main className="min-h-screen bg-zinc-950">{children}</main>;
+  }
 
   if (isCookingMode) {
     return <main>{children}</main>;
@@ -48,20 +88,26 @@ export const App: React.FC = () => {
             <HouseholdProvider>
               <Layout>
                 <Routes>
-                  <Route path="/" element={<HomePage />} />
-                  <Route path="/recipes" element={<RecipesPage />} />
-                  <Route path="/recipes/new" element={<RecipeEditPage />} />
-                  <Route path="/recipes/:id" element={<RecipeDetailPage />} />
-                  <Route path="/recipes/:id/edit" element={<RecipeEditPage />} />
-                  <Route path="/recipes/:id/cook" element={<CookingModePage />} />
-                  <Route path="/imports" element={<ImportCenterPage />} />
-                  <Route path="/planner" element={<PlannerPage />} />
-                  <Route path="/pantry" element={<PantryPage />} />
-                  <Route path="/shopping" element={<ShoppingListPage />} />
-                  <Route path="/receipts" element={<ReceiptScanPage />} />
-                  <Route path="/nutrition" element={<NutritionPage />} />
-                  <Route path="/admin" element={<AdminPage />} />
-                  <Route path="/login" element={<LoginPage />} />
+                  {/* Public Authentication Route */}
+                  <Route path="/login" element={<PublicLoginRoute />} />
+
+                  {/* Protected Application Routes */}
+                  <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+                  <Route path="/recipes" element={<ProtectedRoute><RecipesPage /></ProtectedRoute>} />
+                  <Route path="/recipes/new" element={<ProtectedRoute><RecipeEditPage /></ProtectedRoute>} />
+                  <Route path="/recipes/:id" element={<ProtectedRoute><RecipeDetailPage /></ProtectedRoute>} />
+                  <Route path="/recipes/:id/edit" element={<ProtectedRoute><RecipeEditPage /></ProtectedRoute>} />
+                  <Route path="/recipes/:id/cook" element={<ProtectedRoute><CookingModePage /></ProtectedRoute>} />
+                  <Route path="/imports" element={<ProtectedRoute><ImportCenterPage /></ProtectedRoute>} />
+                  <Route path="/planner" element={<ProtectedRoute><PlannerPage /></ProtectedRoute>} />
+                  <Route path="/pantry" element={<ProtectedRoute><PantryPage /></ProtectedRoute>} />
+                  <Route path="/shopping" element={<ProtectedRoute><ShoppingListPage /></ProtectedRoute>} />
+                  <Route path="/receipts" element={<ProtectedRoute><ReceiptScanPage /></ProtectedRoute>} />
+                  <Route path="/nutrition" element={<ProtectedRoute><NutritionPage /></ProtectedRoute>} />
+                  <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
+
+                  {/* Fallback */}
+                  <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </Layout>
             </HouseholdProvider>

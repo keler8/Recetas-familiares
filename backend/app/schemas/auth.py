@@ -29,7 +29,7 @@ class MfaSetupResponse(BaseModel):
 
 
 class UserBase(BaseModel):
-    email: EmailStr
+    email: str
     username: str
     full_name: Optional[str] = None
     role: str = "family"
@@ -40,7 +40,7 @@ class UserCreate(UserBase):
 
 
 class UserUpdate(BaseModel):
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     full_name: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None

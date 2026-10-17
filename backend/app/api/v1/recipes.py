@@ -15,12 +15,46 @@ from app.schemas.recipe import (
     RecipeCreate, RecipeUpdate, RecipeResponse, RecipeVariantCreate, RecipeVariantResponse,
     RecipeRatingCreate, RecipeRatingResponse, RecipePersonalNoteCreate, RecipePersonalNoteResponse
 )
+from app.models.system import SystemSetting
 from app.api.deps import get_current_user
 from app.services.gemini_service import gemini_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recipes", tags=["Recetas"])
+
+DEFAULT_RECIPE_CONFIG = {
+    "meal_types": [
+        {"id": "desayuno", "label": "Desayuno", "icon": "Sun", "color": "amber"},
+        {"id": "almuerzo_merienda", "label": "Almuerzo / Merienda", "icon": "Coffee", "color": "orange"},
+        {"id": "comida_cena", "label": "Comida / Cena", "icon": "Utensils", "color": "emerald"},
+        {"id": "snacks", "label": "Snacks / Picoteo", "icon": "Apple", "color": "purple"}
+    ],
+    "tags": [
+        {"id": "saludable", "label": "Saludable", "color": "emerald"},
+        {"id": "mas_usada", "label": "Más usada", "color": "blue"},
+        {"id": "top_receta", "label": "Top receta ⭐", "color": "amber"},
+        {"id": "rapida", "label": "Rápida (<25 min)", "color": "cyan"},
+        {"id": "facil", "label": "Fácil", "color": "green"},
+        {"id": "sin_gluten", "label": "Sin gluten", "color": "yellow"},
+        {"id": "sin_lactosa", "label": "Sin lactosa", "color": "indigo"},
+        {"id": "batch_cooking", "label": "Batch Cooking", "color": "teal"}
+    ]
+}
+
+
+@router.get("/config")
+def get_recipe_configuration(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    setting = db.query(SystemSetting).filter(SystemSetting.key == "recipe_config").first()
+    if setting and setting.value:
+        try:
+            return json.loads(setting.value)
+        except Exception:
+            pass
+    return DEFAULT_RECIPE_CONFIG
 
 
 def _format_recipe_response(recipe: Recipe, current_user_id: int, db: Session) -> RecipeResponse:
@@ -53,6 +87,7 @@ def _format_recipe_response(recipe: Recipe, current_user_id: int, db: Session) -
         main_image_url=recipe.main_image_url,
         categories=categories_list,
         tags=tags_list,
+        meal_type=recipe.meal_type or "comida_cena",
         dish_type=recipe.dish_type,
         cuisine=recipe.cuisine,
         prep_time_min=recipe.prep_time_min,
@@ -92,6 +127,7 @@ def list_recipes(
     search: Optional[str] = Query(None, description="Búsqueda textual o por ingredientes"),
     category: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
+    meal_type: Optional[str] = Query(None, description="desayuno, almuerzo_merienda, comida_cena, snacks"),
     dish_type: Optional[str] = Query(None),
     difficulty: Optional[str] = Query(None),
     appliance: Optional[str] = Query(None, description="Thermomix, Airfryer, Tradicional"),
@@ -118,6 +154,9 @@ def list_recipes(
 
     if tag:
         query = query.filter(Recipe.tags.ilike(f"%{tag}%"))
+
+    if meal_type:
+        query = query.filter(Recipe.meal_type == meal_type)
 
     if dish_type:
         query = query.filter(Recipe.dish_type == dish_type)
@@ -160,6 +199,7 @@ def create_recipe(
         main_image_url=recipe_in.main_image_url,
         categories=json.dumps(recipe_in.categories or [], ensure_ascii=False),
         tags=json.dumps(recipe_in.tags or [], ensure_ascii=False),
+        meal_type=recipe_in.meal_type or "comida_cena",
         dish_type=recipe_in.dish_type,
         cuisine=recipe_in.cuisine,
         prep_time_min=recipe_in.prep_time_min,
@@ -291,6 +331,8 @@ def update_recipe(
         recipe.categories = json.dumps(recipe_up.categories, ensure_ascii=False)
     if recipe_up.tags is not None:
         recipe.tags = json.dumps(recipe_up.tags, ensure_ascii=False)
+    if recipe_up.meal_type is not None:
+        recipe.meal_type = recipe_up.meal_type
     if recipe_up.dish_type is not None:
         recipe.dish_type = recipe_up.dish_type
     if recipe_up.cuisine is not None:

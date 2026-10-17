@@ -75,6 +75,7 @@ class RecipeBase(BaseModel):
     main_image_url: Optional[str] = None
     categories: Optional[List[str]] = []
     tags: Optional[List[str]] = []
+    meal_type: Optional[str] = "comida_cena"
     dish_type: Optional[str] = "Plato principal"
     cuisine: Optional[str] = "Mediterránea"
     prep_time_min: int = 15
@@ -109,6 +110,7 @@ class RecipeUpdate(BaseModel):
     main_image_url: Optional[str] = None
     categories: Optional[List[str]] = None
     tags: Optional[List[str]] = None
+    meal_type: Optional[str] = None
     dish_type: Optional[str] = None
     cuisine: Optional[str] = None
     prep_time_min: Optional[int] = None

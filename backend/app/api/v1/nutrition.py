@@ -1,15 +1,17 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.auth import User
+from app.models.recipe import Recipe
 from app.models.nutrition import NutritionProfile, NutritionConsent
 from app.schemas.nutrition import (
     NutritionProfileResponse, NutritionProfileUpdate,
     NutritionConsentRequest, NutritionAdviceRequest
 )
 from app.api.deps import get_current_user
+from app.services.gemini_service import gemini_service
 
 router = APIRouter(prefix="/nutrition", tags=["Mi Alimentación Saludable"])
 
@@ -116,27 +118,44 @@ def get_nutrition_advice(
     db: Session = Depends(get_db)
 ):
     """
-    Provides general culinary and healthy eating advice.
-    Explicitly clarifies it is for culinary orientation and not medical guidance.
+    Acts as an intelligent Dietary and Culinary Assistant.
+    Provides healthy dietary recommendations, recipe adaptations and smart swaps.
     """
-    consent = db.query(NutritionConsent).filter(
-        NutritionConsent.user_id == current_user.id,
-        NutritionConsent.ai_data_consent == True
-    ).first()
+    profile = db.query(NutritionProfile).filter(NutritionProfile.user_id == current_user.id).first()
+    dietary_goals = profile.dietary_goals if profile else "Dieta mediterránea saludable y equilibrada"
+    preferred_foods = profile.preferred_foods if profile else None
+    excluded_foods = profile.excluded_foods if profile else None
 
-    if not consent:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Para recibir orientación nutricional de IA es necesario aceptar el consentimiento expreso de privacidad."
-        )
+    recipe_data = None
+    if req.target_recipe_id:
+        rec = db.query(Recipe).filter(Recipe.id == req.target_recipe_id).first()
+        if rec:
+            recipe_data = {
+                "title": rec.title,
+                "prep_time_min": rec.prep_time_min,
+                "cook_time_min": rec.cook_time_min,
+                "ingredients": [
+                    {"name": ing.name, "amount": ing.amount, "unit": ing.unit}
+                    for v in rec.variants for ing in v.ingredients if v.is_default or len(rec.variants) == 1
+                ],
+                "steps": [
+                    {"step_number": s.step_number, "instruction": s.instruction}
+                    for v in rec.variants for s in v.steps if v.is_default or len(rec.variants) == 1
+                ]
+            }
 
-    # General healthy advice response
-    advice = (
-        "Recomendaciones culinarias generales:\n"
-        "1. Prioriza alimentos frescos y de temporada, aumentando la base de hortalizas y verduras en platos principales.\n"
-        "2. Para técnicas de cocción, el vapor (Thermomix Varoma) y el asado con aire caliente (Airfryer) permiten reducir el aceite añadido manteniendo texturas crujientes y nutrientes.\n"
-        "3. Incorpora legumbres dos o tres veces por semana como fuente saciante de proteína vegetal y fibra.\n"
-        "\n*Nota legal: Esta información es meramente orientativa y culinaria. No constituye consejo médico ni diagnóstico nutricional personalizado.*"
+    result = gemini_service.generate_dietary_advice_and_recipe_modifications(
+        dietary_goals=dietary_goals,
+        user_query=req.query,
+        recipe=recipe_data,
+        preferred_foods=preferred_foods,
+        excluded_foods=excluded_foods
     )
 
-    return {"advice": advice, "disclaimer_acknowledged": True}
+    return {
+        "advice": result.get("advice"),
+        "suggested_modifications": result.get("suggested_modifications", []),
+        "healthy_recipe_variant": result.get("healthy_recipe_variant"),
+        "disclaimer": "Orientación culinaria y nutricional familiar orientativa. No constituye prescripción médica.",
+        "disclaimer_acknowledged": True
+    }
