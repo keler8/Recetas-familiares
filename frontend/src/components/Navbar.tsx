@@ -43,10 +43,6 @@ export const Navbar: React.FC = () => {
           <Link to="/recipes" className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-zinc-800/60 transition-all">
             Recetas
           </Link>
-          <Link to="/recipes?favorites=true" className="px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-500 hover:text-rose-600 hover:bg-white dark:hover:bg-zinc-800/60 transition-all flex items-center gap-1">
-            <Heart className="w-3.5 h-3.5 fill-rose-500/20" />
-            Favoritos
-          </Link>
           <Link to="/planner" className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-zinc-800/60 transition-all">
             Planificador
           </Link>

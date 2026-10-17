@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   Home, BookOpen, Calendar, Package, Menu, X,
-  ShoppingBag, Sparkles, Heart, Receipt, Shield, Apple,
+  ShoppingBag, Sparkles, Receipt, Shield, Apple,
   ChevronRight, Users
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -64,19 +64,6 @@ export const BottomNav: React.FC = () => {
                 </div>
               </button>
 
-              <button
-                type="button"
-                onClick={() => handleNavigate('/recipes?favorites=true')}
-                className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/80 flex items-center gap-3 text-left hover:border-rose-500/50 transition-all"
-              >
-                <div className="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-500 flex items-center justify-center shrink-0">
-                  <Heart className="w-5 h-5 fill-rose-500/20" />
-                </div>
-                <div>
-                  <span className="text-xs font-bold text-slate-900 dark:text-white block">Favoritos</span>
-                  <span className="text-[10px] text-slate-500 dark:text-zinc-400">Platos estrella</span>
-                </div>
-              </button>
 
               <button
                 type="button"
