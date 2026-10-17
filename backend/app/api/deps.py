@@ -34,6 +34,15 @@ def get_current_user(
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token no contiene sujeto")
+
+    if payload.get("mfa_pending"):
+        path = request.url.path
+        if not (path.endswith("/mfa/setup") or path.endswith("/mfa/confirm")):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Autenticación en dos pasos pendiente",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     
     user = db.query(User).filter(User.id == int(user_id)).first()
     if not user:
