@@ -77,6 +77,7 @@ class UserPreferences(Base):
     language = Column(String(10), default="es", nullable=False)  # es, eu
     default_servings = Column(Integer, default=4, nullable=False)
     widgets_config = Column(Text, nullable=True)  # JSON config for home screen
+    notification_channels = Column(Text, nullable=True)  # JSON config for notification channels
 
     user = relationship("User", back_populates="preferences")
 

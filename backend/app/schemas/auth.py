@@ -51,6 +51,7 @@ class UserPreferencesSchema(BaseModel):
     language: str = "es"
     default_servings: int = 4
     widgets_config: Optional[str] = None
+    notification_channels: Optional[str] = None
 
     class Config:
         from_attributes = True

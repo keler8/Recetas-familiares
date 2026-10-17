@@ -10,7 +10,7 @@ from app.models import User, Household, HouseholdMembership, Recipe, RecipeVaria
 from app.services.auth_service import auth_service
 from app.api.v1 import (
     auth, households, recipes, imports, meal_plans,
-    pantry, shopping, receipts, nutrition, drive, admin
+    pantry, shopping, receipts, nutrition, drive, admin, notifications
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -234,3 +234,4 @@ app.include_router(receipts.router, prefix="/api")
 app.include_router(nutrition.router, prefix="/api")
 app.include_router(drive.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(notifications.router, prefix="/api")

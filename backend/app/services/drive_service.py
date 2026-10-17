@@ -16,6 +16,14 @@ class DriveService:
     def is_configured(self) -> bool:
         return bool(self.client_id and self.client_secret)
 
+    def update_credentials(self, client_id: Optional[str] = None, client_secret: Optional[str] = None, redirect_uri: Optional[str] = None):
+        if client_id is not None:
+            self.client_id = client_id.strip() if client_id else None
+        if client_secret is not None:
+            self.client_secret = client_secret.strip() if client_secret else None
+        if redirect_uri is not None:
+            self.redirect_uri = redirect_uri.strip() if redirect_uri else self.redirect_uri
+
     def get_auth_url(self, state: str = "drive_auth") -> Optional[str]:
         if not self.is_configured():
             return None

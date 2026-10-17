@@ -194,6 +194,8 @@ def update_preferences(
     prefs.default_servings = prefs_in.default_servings
     if prefs_in.widgets_config:
         prefs.widgets_config = prefs_in.widgets_config
+    if prefs_in.notification_channels is not None:
+        prefs.notification_channels = prefs_in.notification_channels
 
     db.commit()
     db.refresh(prefs)

@@ -76,6 +76,34 @@ class GeminiService:
     def is_configured(self) -> bool:
         return bool(self.api_key and len(self.api_key.strip()) > 5)
 
+    def update_credentials(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        if api_key is not None:
+            self.api_key = api_key.strip() if api_key else None
+        if model is not None:
+            self.model_name = model.strip() if model else self.model_name
+        self._client = None  # Force re-initialization
+
+    def test_connection(self, api_key: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+        key_to_use = (api_key.strip() if api_key else None) or self.api_key
+        model_to_use = (model.strip() if model else None) or self.model_name
+        if not key_to_use or len(key_to_use) < 5:
+            return {"success": False, "error": "No se ha proporcionado una clave API de Gemini válida."}
+        try:
+            from google import genai
+            client = genai.Client(api_key=key_to_use)
+            response = client.models.generate_content(
+                model=model_to_use,
+                contents="Responde únicamente: 'Conexión con Recetario Familiar exitosa.'",
+            )
+            return {
+                "success": True,
+                "message": response.text.strip(),
+                "model": model_to_use
+            }
+        except Exception as e:
+            logger.error(f"Gemini connection test error: {e}")
+            return {"success": False, "error": str(e)}
+
     def _get_client(self):
         if not self._client and self.is_configured():
             try:

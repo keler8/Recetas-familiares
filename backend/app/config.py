@@ -59,7 +59,12 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM: str = "recetas@familiar.local"
+    EMAILS_FROM_EMAIL: Optional[str] = None
     SMTP_TLS: bool = True
+
+    # Telegram Bot
+    TELEGRAM_BOT_TOKEN: Optional[str] = None
+    TELEGRAM_CHAT_ID: Optional[str] = None
 
     # Synology NAS
     SYNOLOGY_HOST: str = "192.168.1.8"
