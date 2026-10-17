@@ -1,6 +1,6 @@
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Numeric
+    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Numeric, Float
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -47,6 +47,14 @@ class Diner(Base):
     household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    sex = Column(String(20), nullable=True)  # hombre, mujer
+    age = Column(Integer, nullable=True)
+    weight_kg = Column(Float, nullable=True)
+    height_cm = Column(Float, nullable=True)
+    activity_level = Column(String(50), nullable=True)  # sedentario, ligero, moderado, intenso
+    dietary_goal = Column(String(50), nullable=True)  # deficit, mantenimiento, superavit, saludable
+    target_calories = Column(Integer, nullable=True)
+    calorie_offset = Column(Integer, default=0, nullable=False)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

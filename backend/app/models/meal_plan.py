@@ -1,6 +1,6 @@
 from datetime import datetime, date
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, Date, ForeignKey
+    Column, Integer, String, Text, Boolean, DateTime, Date, ForeignKey, Float
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -43,6 +43,7 @@ class PlannedRecipe(Base):
     meal_slot_id = Column(Integer, ForeignKey("meal_slots.id", ondelete="CASCADE"), nullable=False, index=True)
     recipe_id = Column(Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True)
     custom_recipe_name = Column(String(200), nullable=True)
+    custom_calories = Column(Float, nullable=True)
     servings = Column(Integer, default=4, nullable=False)
     is_cooked = Column(Boolean, default=False, nullable=False)
 

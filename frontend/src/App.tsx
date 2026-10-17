@@ -20,6 +20,7 @@ import { ShoppingListPage } from './pages/ShoppingListPage';
 import { ReceiptScanPage } from './pages/ReceiptScanPage';
 import { NutritionPage } from './pages/NutritionPage';
 import { AdminPage } from './pages/AdminPage';
+import { ProfilePage } from './pages/ProfilePage';
 import { LoginPage } from './pages/LoginPage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -105,6 +106,7 @@ export const App: React.FC = () => {
                   <Route path="/receipts" element={<ProtectedRoute><ReceiptScanPage /></ProtectedRoute>} />
                   <Route path="/nutrition" element={<ProtectedRoute><NutritionPage /></ProtectedRoute>} />
                   <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
+                  <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
 
                   {/* Fallback */}
                   <Route path="*" element={<Navigate to="/" replace />} />

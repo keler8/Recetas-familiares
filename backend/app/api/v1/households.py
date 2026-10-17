@@ -138,6 +138,36 @@ def invite_to_household(
     return {"message": f"Usuario {target_user.username} añadido con éxito al hogar"}
 
 
+def _calculate_tdee(sex: Optional[str], age: Optional[int], weight_kg: Optional[float], height_cm: Optional[float], activity_level: Optional[str], goal: Optional[str], offset: int = 0) -> Optional[int]:
+    if not (weight_kg and height_cm and age and sex):
+        return None
+    if str(sex).lower() in ["hombre", "male", "m"]:
+        bmr = 10.0 * float(weight_kg) + 6.25 * float(height_cm) - 5.0 * int(age) + 5.0
+    else:
+        bmr = 10.0 * float(weight_kg) + 6.25 * float(height_cm) - 5.0 * int(age) - 161.0
+    
+    act = str(activity_level or "").lower()
+    if any(k in act for k in ["intenso", "alta", "deportista", "atleta"]):
+        mult = 1.725
+    elif "moderad" in act:
+        mult = 1.55
+    elif "liger" in act:
+        mult = 1.375
+    else:
+        mult = 1.2
+    
+    tdee = bmr * mult
+    g = str(goal or "").lower()
+    if any(k in g for k in ["deficit", "perder", "grasa", "peso"]):
+        adj = -400
+    elif any(k in g for k in ["superavit", "ganar", "volumen", "musculo"]):
+        adj = 300
+    else:
+        adj = 0
+        
+    return int(round(tdee + adj + (offset or 0)))
+
+
 # Diner endpoints
 @router.get("/diners", response_model=List[DinerResponse])
 def list_diners(
@@ -153,10 +183,25 @@ def add_diner(
     household: Household = Depends(get_current_household),
     db: Session = Depends(get_db)
 ):
+    target_cals = d_in.target_calories
+    if not target_cals:
+        target_cals = _calculate_tdee(
+            d_in.sex, d_in.age, d_in.weight_kg, d_in.height_cm,
+            d_in.activity_level, d_in.dietary_goal, d_in.calorie_offset
+        )
+
     diner = Diner(
         household_id=household.id,
         name=d_in.name,
         is_active=d_in.is_active,
+        sex=d_in.sex,
+        age=d_in.age,
+        weight_kg=d_in.weight_kg,
+        height_cm=d_in.height_cm,
+        activity_level=d_in.activity_level,
+        dietary_goal=d_in.dietary_goal,
+        target_calories=target_cals,
+        calorie_offset=d_in.calorie_offset or 0,
         notes=d_in.notes
     )
     db.add(diner)
@@ -183,8 +228,23 @@ def update_diner(
     if not diner:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Persona/Comensal no encontrado")
 
+    target_cals = d_in.target_calories
+    if not target_cals:
+        target_cals = _calculate_tdee(
+            d_in.sex, d_in.age, d_in.weight_kg, d_in.height_cm,
+            d_in.activity_level, d_in.dietary_goal, d_in.calorie_offset
+        )
+
     diner.name = d_in.name
     diner.is_active = d_in.is_active
+    diner.sex = d_in.sex
+    diner.age = d_in.age
+    diner.weight_kg = d_in.weight_kg
+    diner.height_cm = d_in.height_cm
+    diner.activity_level = d_in.activity_level
+    diner.dietary_goal = d_in.dietary_goal
+    diner.target_calories = target_cals
+    diner.calorie_offset = d_in.calorie_offset or 0
     diner.notes = d_in.notes
 
     # Replace preferences and restrictions

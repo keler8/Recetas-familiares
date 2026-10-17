@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from app.config import settings
 from app.database import engine, Base, SessionLocal
 from app.models import User, Household, HouseholdMembership, Recipe, RecipeVariant, RecipeIngredient, RecipeStep
@@ -18,8 +19,34 @@ logger = logging.getLogger("recetario")
 
 
 def seed_initial_data():
-    """Initializes database schema and seeds initial admin and demo recipe."""
+    """Initializes database schema, applies safe column updates, and seeds initial admin and demo recipe."""
     Base.metadata.create_all(bind=engine)
+
+    # Safe column migrations for existing databases
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS sex VARCHAR(20)"))
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS age INTEGER"))
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS weight_kg DOUBLE PRECISION"))
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION"))
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS activity_level VARCHAR(50)"))
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS dietary_goal VARCHAR(50)"))
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS target_calories INTEGER"))
+            conn.execute(text("ALTER TABLE diners ADD COLUMN IF NOT EXISTS calorie_offset INTEGER DEFAULT 0"))
+
+            conn.execute(text("ALTER TABLE planned_recipes ADD COLUMN IF NOT EXISTS custom_calories DOUBLE PRECISION"))
+
+            conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS sex VARCHAR(20)"))
+            conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS age INTEGER"))
+            conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS weight_kg DOUBLE PRECISION"))
+            conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS height_cm DOUBLE PRECISION"))
+            conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS dietary_goal VARCHAR(50)"))
+            conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS target_calories INTEGER"))
+            conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS calorie_offset INTEGER DEFAULT 0"))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Column migration notice: {e}")
+
     db = SessionLocal()
     try:
         # 1. Seed initial admin if no user exists

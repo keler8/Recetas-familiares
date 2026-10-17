@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   Home, BookOpen, Calendar, Package, Menu, X,
   ShoppingBag, Sparkles, Receipt, Shield, Apple,
-  ChevronRight, Users
+  ChevronRight, Users, User
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useHousehold } from '../context/HouseholdContext';
@@ -104,6 +104,20 @@ export const BottomNav: React.FC = () => {
                 <div>
                   <span className="text-xs font-bold text-slate-900 dark:text-white block">Escanear Ticket</span>
                   <span className="text-[10px] text-slate-500 dark:text-zinc-400">OCR supermercado</span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleNavigate('/profile')}
+                className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/80 flex items-center gap-3 text-left hover:border-amber-500/50 transition-all"
+              >
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center shrink-0">
+                  <User className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-slate-900 dark:text-white block">Mi Perfil</span>
+                  <span className="text-[10px] text-slate-500 dark:text-zinc-400">Contraseña y avisos</span>
                 </div>
               </button>
 

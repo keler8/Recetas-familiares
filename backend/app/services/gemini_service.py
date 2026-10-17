@@ -207,18 +207,23 @@ class GeminiService:
 
     def generate_meal_plan_suggestions(self, approved_recipes: List[Dict[str, Any]], preferences: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Generates healthy, diverse meal plan suggestions prioritizing approved recipes.
+        Generates healthy, diverse meal plan suggestions covering breakfasts, mid-mornings, lunches, snacks, and dinners,
+        prioritizing approved recipes and healthy daily food items with estimated calories.
         """
         if self.is_configured():
             try:
                 client = self._get_client()
                 if client:
                     prompt = (
-                        "Genera un menú semanal equilibrado de lunes a domingo (comida y cena). "
-                        "Prioriza las siguientes recetas aprobadas existentes en la biblioteca. "
-                        f"Preferencias del hogar: {json.dumps(preferences, ensure_ascii=False)}.\n"
-                        f"Recetas disponibles: {json.dumps([{'id': r['id'], 'title': r['title'], 'dish_type': r.get('dish_type')} for r in approved_recipes], ensure_ascii=False)}.\n"
-                        "Devuelve una lista JSON con días, momentos (comida, cena), recipe_id o título sugerido."
+                        "Genera un menú semanal equilibrado de lunes a domingo cubriendo todos los momentos del día: "
+                        "desayuno, almuerzo (media mañana), comida, merienda y cena. "
+                        "Para comida y cena prioriza las siguientes recetas aprobadas existentes en la biblioteca. "
+                        "Para desayunos, almuerzos/media mañana y meriendas puedes sugerir productos sencillos y saludables "
+                        "(ej. 'Tostada integral con tomate y AOVE', '1 Manzana con puñado de nueces', 'Yogur natural con semillas', 'Kéfir con frutos rojos').\n"
+                        f"Preferencias y hábitos del hogar: {json.dumps(preferences, ensure_ascii=False)}.\n"
+                        f"Recetas disponibles: {json.dumps([{'id': r['id'], 'title': r['title'], 'dish_type': r.get('dish_type'), 'calories': r.get('nutrition_calories')} for r in approved_recipes], ensure_ascii=False)}.\n"
+                        "Devuelve una lista JSON con objetos: "
+                        "[{'day': str, 'meal_type': 'desayuno'|'almuerzo'|'comida'|'merienda'|'cena'|'snacks', 'recipe_id': int|null, 'title': str, 'calories': float}]."
                     )
                     response = client.models.generate_content(
                         model=self.model_name,
@@ -424,27 +429,88 @@ class GeminiService:
 
     def _heuristic_meal_plan(self, recipes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         days = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+        breakfast_options = [
+            {"title": "Tostada integral con tomate rallado, AOVE y huevo pochado", "calories": 340},
+            {"title": "Porridge de copos de avena con bebida vegetal, canela y plátano", "calories": 360},
+            {"title": "Tostada de centeno con aguacate, semillas de chía y café", "calories": 320},
+            {"title": "Yogur natural con granola casera y frutos rojos", "calories": 310},
+            {"title": "Tortilla francesa de 2 huevos con espinacas y pan integral", "calories": 350},
+            {"title": "Pancake de avena y plátano con una cucharadita de miel", "calories": 380},
+            {"title": "Tostada con pavo braseado, tomate y aceite de oliva virgen extra", "calories": 330}
+        ]
+        midmorning_options = [
+            {"title": "1 Manzana Fuji y 4 nueces crudas", "calories": 160},
+            {"title": "Yogur griego natural sin azúcar", "calories": 130},
+            {"title": "1 Plátano de Canarias y un puñado de almendras", "calories": 190},
+            {"title": "2 Mandarinas y café solo o infusión", "calories": 85},
+            {"title": "Queso fresco de Burgos con arándanos", "calories": 140},
+            {"title": "1 Pera de temporada y 3 nueces", "calories": 150},
+            {"title": "Zumo verde de pepino, manzana y jengibre", "calories": 95}
+        ]
+        snack_options = [
+            {"title": "Hummus tradicional con bastoncitos de zanahoria", "calories": 170},
+            {"title": "Kéfir natural con semillas de lino molidas", "calories": 140},
+            {"title": "1 Onza de chocolate negro (>85%) y unas avellanas", "calories": 160},
+            {"title": "Torta de arroz con crema de cacahuete 100%", "calories": 175},
+            {"title": "Yogur de soja natural con nueces", "calories": 150},
+            {"title": "Infusión digestiva con un puñado de almendras tostadas", "calories": 130},
+            {"title": "Rodajas de manzana con canela al microondas", "calories": 90}
+        ]
+
         result = []
         recipe_idx = 0
         total_r = len(recipes)
 
-        for d in days:
-            lunch_r = recipes[recipe_idx % total_r] if total_r > 0 else {"title": "Plato equilibrado de verduras y proteína"}
-            dinner_r = recipes[(recipe_idx + 1) % total_r] if total_r > 0 else {"title": "Crema ligera o pescado a la plancha"}
+        for i, d in enumerate(days):
+            bf = breakfast_options[i % len(breakfast_options)]
+            mm = midmorning_options[i % len(midmorning_options)]
+            sn = snack_options[i % len(snack_options)]
+
+            lunch_r = recipes[recipe_idx % total_r] if total_r > 0 else {"title": "Plato equilibrado de verduras y proteína", "calories": 550}
+            dinner_r = recipes[(recipe_idx + 1) % total_r] if total_r > 0 else {"title": "Crema ligera o pescado a la plancha", "calories": 420}
             recipe_idx += 2
 
+            # 1. Desayuno
+            result.append({
+                "day": d,
+                "meal_type": "desayuno",
+                "recipe_id": None,
+                "title": bf["title"],
+                "calories": bf["calories"]
+            })
+            # 2. Almuerzo / Media mañana
+            result.append({
+                "day": d,
+                "meal_type": "almuerzo",
+                "recipe_id": None,
+                "title": mm["title"],
+                "calories": mm["calories"]
+            })
+            # 3. Comida
             result.append({
                 "day": d,
                 "meal_type": "comida",
                 "recipe_id": lunch_r.get("id"),
-                "title": lunch_r.get("title")
+                "title": lunch_r.get("title"),
+                "calories": lunch_r.get("calories") or lunch_r.get("nutrition_calories") or 600
             })
+            # 4. Merienda
+            result.append({
+                "day": d,
+                "meal_type": "merienda",
+                "recipe_id": None,
+                "title": sn["title"],
+                "calories": sn["calories"]
+            })
+            # 5. Cena
             result.append({
                 "day": d,
                 "meal_type": "cena",
                 "recipe_id": dinner_r.get("id"),
-                "title": dinner_r.get("title")
+                "title": dinner_r.get("title"),
+                "calories": dinner_r.get("calories") or dinner_r.get("nutrition_calories") or 430
             })
+
         return result
 
     def generate_dietary_advice_and_recipe_modifications(

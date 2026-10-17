@@ -1,6 +1,6 @@
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey
+    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Float
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -16,6 +16,13 @@ class NutritionProfile(Base):
     available_time_min = Column(Integer, default=45, nullable=False)
     meal_frequency = Column(Integer, default=3, nullable=False)
     physical_activity = Column(String(50), nullable=True)  # ligera, moderada, alta
+    sex = Column(String(20), nullable=True)  # hombre, mujer
+    age = Column(Integer, nullable=True)
+    weight_kg = Column(Float, nullable=True)
+    height_cm = Column(Float, nullable=True)
+    dietary_goal = Column(String(50), nullable=True)  # deficit, mantenimiento, superavit, saludable
+    target_calories = Column(Integer, nullable=True)
+    calorie_offset = Column(Integer, default=0, nullable=False)
     preferred_foods = Column(Text, nullable=True)
     excluded_foods = Column(Text, nullable=True)
     focus_on_healthy = Column(Boolean, default=True, nullable=False)

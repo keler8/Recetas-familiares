@@ -116,6 +116,20 @@ export const Navbar: React.FC = () => {
           {/* User profile / Admin / Logout */}
           {user ? (
             <div className="flex items-center gap-1.5">
+              {/* Profile Link */}
+              <Link
+                to="/profile"
+                className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-amber-500/50 transition-colors shadow-sm"
+                title="Ajustes de mi Cuenta"
+              >
+                <div className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold text-[11px] uppercase">
+                  {user.username ? user.username.slice(0, 2) : 'US'}
+                </div>
+                <span className="text-xs font-bold text-slate-700 dark:text-zinc-300 hidden sm:inline max-w-[85px] truncate">
+                  {user.username}
+                </span>
+              </Link>
+
               {user.role === 'admin' && (
                 <Link
                   to="/admin"

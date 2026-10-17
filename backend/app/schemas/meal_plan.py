@@ -7,6 +7,8 @@ class PlannedRecipeResponse(BaseModel):
     id: int
     recipe_id: Optional[int] = None
     custom_recipe_name: Optional[str] = None
+    custom_calories: Optional[float] = None
+    calories: Optional[float] = None
     servings: int
     is_cooked: bool
     recipe_title: Optional[str] = None
@@ -21,6 +23,7 @@ class MealSlotResponse(BaseModel):
     meal_type: str
     servings: int
     notes: Optional[str] = None
+    total_calories: Optional[float] = None
     planned_recipes: List[PlannedRecipeResponse] = []
 
     class Config:
@@ -53,6 +56,7 @@ class AddRecipeToSlotRequest(BaseModel):
     meal_type: str
     recipe_id: Optional[int] = None
     custom_recipe_name: Optional[str] = None
+    custom_calories: Optional[float] = None
     servings: int = 4
 
 

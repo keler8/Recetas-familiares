@@ -18,13 +18,62 @@ from app.services.gemini_service import gemini_service
 router = APIRouter(prefix="/meal-plans", tags=["Planificador de Menús"])
 
 
+def _format_plan_response(plan: MealPlan, db: Session) -> MealPlanResponse:
+    slot_resps = []
+    for s in plan.slots:
+        p_resps = []
+        slot_cals = 0.0
+        for p in s.planned_recipes:
+            rec_title = p.custom_recipe_name
+            cal = p.custom_calories
+            if p.recipe_id:
+                rec = db.query(Recipe).filter(Recipe.id == p.recipe_id).first()
+                if rec:
+                    rec_title = rec.title
+                    if rec.nutrition_calories:
+                        cal = round(float(rec.nutrition_calories) * (p.servings / (rec.base_servings or 4)), 1)
+            
+            if cal is not None:
+                slot_cals += float(cal)
+
+            p_resps.append(PlannedRecipeResponse(
+                id=p.id,
+                recipe_id=p.recipe_id,
+                custom_recipe_name=p.custom_recipe_name,
+                custom_calories=p.custom_calories,
+                calories=round(cal, 1) if cal is not None else None,
+                servings=p.servings,
+                is_cooked=p.is_cooked,
+                recipe_title=rec_title
+            ))
+        slot_resps.append(MealSlotResponse(
+            id=s.id,
+            slot_date=s.slot_date,
+            meal_type=s.meal_type,
+            servings=s.servings,
+            notes=s.notes,
+            total_calories=round(slot_cals, 1) if slot_cals > 0 else None,
+            planned_recipes=p_resps
+        ))
+    return MealPlanResponse(
+        id=plan.id,
+        household_id=plan.household_id,
+        title=plan.title,
+        start_date=plan.start_date,
+        end_date=plan.end_date,
+        is_template=plan.is_template,
+        created_at=plan.created_at,
+        slots=slot_resps
+    )
+
+
 @router.get("", response_model=List[MealPlanResponse])
 def list_meal_plans(
     household: Household = Depends(get_current_household),
     db: Session = Depends(get_db)
 ):
     plans = db.query(MealPlan).filter(MealPlan.household_id == household.id).order_by(MealPlan.start_date.desc()).all()
-    return plans
+    return [_format_plan_response(p, db) for p in plans]
 
 
 @router.post("", response_model=MealPlanResponse)
@@ -43,7 +92,7 @@ def create_meal_plan(
     db.add(plan)
     db.commit()
     db.refresh(plan)
-    return plan
+    return _format_plan_response(plan, db)
 
 
 @router.post("/{plan_id}/add-recipe")
@@ -77,11 +126,38 @@ def add_recipe_to_slot(
         meal_slot_id=slot.id,
         recipe_id=req.recipe_id,
         custom_recipe_name=req.custom_recipe_name,
+        custom_calories=req.custom_calories,
         servings=req.servings
     )
     db.add(planned)
     db.commit()
-    return {"message": "Receta añadida al plan de comidas"}
+    return {"message": "Alimento o receta añadido con éxito al plan"}
+
+
+@router.delete("/planned-recipes/{planned_id}")
+def delete_planned_recipe(
+    planned_id: int,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    planned = db.query(PlannedRecipe).join(MealSlot).join(MealPlan).filter(
+        PlannedRecipe.id == planned_id,
+        MealPlan.household_id == household.id
+    ).first()
+    if not planned:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Elemento no encontrado en el menú")
+
+    slot_id = planned.meal_slot_id
+    db.delete(planned)
+    db.commit()
+
+    # If slot has no more items, clean it up
+    remaining = db.query(PlannedRecipe).filter(PlannedRecipe.meal_slot_id == slot_id).count()
+    if remaining == 0:
+        db.query(MealSlot).filter(MealSlot.id == slot_id).delete()
+        db.commit()
+
+    return {"message": "Elemento eliminado correctamente del menú"}
 
 
 @router.post("/generate-ai")
@@ -146,6 +222,7 @@ def generate_ai_menu(
             meal_slot_id=slot.id,
             recipe_id=prop.get("recipe_id"),
             custom_recipe_name=prop.get("title") if not prop.get("recipe_id") else None,
+            custom_calories=float(prop["calories"]) if prop.get("calories") is not None else None,
             servings=4
         )
         db.add(planned)

@@ -16,6 +16,50 @@ from app.services.gemini_service import gemini_service
 router = APIRouter(prefix="/nutrition", tags=["Mi Alimentación Saludable"])
 
 
+def _compute_profile_metrics(profile: NutritionProfile):
+    bmr = None
+    target_cals = profile.target_calories
+    
+    if profile.weight_kg and profile.height_cm and profile.age and profile.sex:
+        if str(profile.sex).lower() in ["hombre", "male", "m"]:
+            bmr = round(10.0 * float(profile.weight_kg) + 6.25 * float(profile.height_cm) - 5.0 * int(profile.age) + 5.0)
+        else:
+            bmr = round(10.0 * float(profile.weight_kg) + 6.25 * float(profile.height_cm) - 5.0 * int(profile.age) - 161.0)
+        
+        if not target_cals:
+            act = str(profile.physical_activity or "").lower()
+            if any(k in act for k in ["intenso", "alta", "deportista", "atleta"]):
+                mult = 1.725
+            elif "moderad" in act:
+                mult = 1.55
+            elif "liger" in act:
+                mult = 1.375
+            else:
+                mult = 1.2
+            
+            tdee = bmr * mult
+            g = str(profile.dietary_goal or "").lower()
+            if any(k in g for k in ["deficit", "perder", "grasa", "peso"]):
+                adj = -400
+            elif any(k in g for k in ["superavit", "ganar", "volumen", "musculo"]):
+                adj = 300
+            else:
+                adj = 0
+            
+            target_cals = int(round(tdee + adj + (profile.calorie_offset or 0)))
+
+    # Compute daily distribution based on target_cals (default to 2000 if not set yet)
+    effective_cals = target_cals or 2000
+    breakdown = {
+        "desayuno": int(round(effective_cals * 0.20)),
+        "almuerzo": int(round(effective_cals * 0.10)),
+        "comida": int(round(effective_cals * 0.35)),
+        "merienda": int(round(effective_cals * 0.10)),
+        "cena": int(round(effective_cals * 0.25))
+    }
+    return bmr, target_cals, breakdown
+
+
 @router.get("/profile", response_model=NutritionProfileResponse)
 def get_nutrition_profile(
     current_user: User = Depends(get_current_user),
@@ -33,8 +77,13 @@ def get_nutrition_profile(
         NutritionConsent.ai_data_consent == True
     ).first()
 
+    bmr, target_cals, breakdown = _compute_profile_metrics(profile)
+
     resp = NutritionProfileResponse.model_validate(profile)
     resp.has_ai_consent = consent is not None
+    resp.calculated_bmr = bmr
+    resp.target_calories = target_cals
+    resp.daily_meal_breakdown = breakdown
     return resp
 
 
@@ -59,6 +108,20 @@ def update_nutrition_profile(
         profile.meal_frequency = prof_up.meal_frequency
     if prof_up.physical_activity is not None:
         profile.physical_activity = prof_up.physical_activity
+    if prof_up.sex is not None:
+        profile.sex = prof_up.sex
+    if prof_up.age is not None:
+        profile.age = prof_up.age
+    if prof_up.weight_kg is not None:
+        profile.weight_kg = prof_up.weight_kg
+    if prof_up.height_cm is not None:
+        profile.height_cm = prof_up.height_cm
+    if prof_up.dietary_goal is not None:
+        profile.dietary_goal = prof_up.dietary_goal
+    if prof_up.target_calories is not None:
+        profile.target_calories = prof_up.target_calories
+    if prof_up.calorie_offset is not None:
+        profile.calorie_offset = prof_up.calorie_offset
     if prof_up.preferred_foods is not None:
         profile.preferred_foods = prof_up.preferred_foods
     if prof_up.excluded_foods is not None:
@@ -77,8 +140,13 @@ def update_nutrition_profile(
         NutritionConsent.ai_data_consent == True
     ).first()
 
+    bmr, target_cals, breakdown = _compute_profile_metrics(profile)
+
     resp = NutritionProfileResponse.model_validate(profile)
     resp.has_ai_consent = consent is not None
+    resp.calculated_bmr = bmr
+    resp.target_calories = target_cals
+    resp.daily_meal_breakdown = breakdown
     return resp
 
 

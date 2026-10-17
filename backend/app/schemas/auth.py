@@ -46,6 +46,16 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class UserProfileUpdateRequest(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+
+
 class UserPreferencesSchema(BaseModel):
     theme: str = "dark"
     language: str = "es"

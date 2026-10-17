@@ -7,7 +7,7 @@ from app.config import settings
 from app.models.auth import User, UserSession, UserPreferences
 from app.schemas.auth import (
     Token, LoginRequest, MfaVerifyRequest, MfaSetupResponse,
-    UserResponse, UserPreferencesSchema
+    UserResponse, UserPreferencesSchema, ChangePasswordRequest, UserProfileUpdateRequest
 )
 from app.services.auth_service import auth_service
 from app.api.deps import get_current_user
@@ -162,6 +162,65 @@ def get_me(
     current_user: User = Depends(get_current_user)
 ):
     return current_user
+
+
+@router.put("/me", response_model=UserResponse)
+def update_me(
+    req: UserProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if req.full_name is not None:
+        current_user.full_name = req.full_name.strip()
+    if req.email is not None and req.email.strip():
+        new_email = req.email.strip().lower()
+        # Verify email uniqueness
+        existing = db.query(User).filter(User.email == new_email, User.id != current_user.id).first()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El correo electrónico ya está en uso")
+        current_user.email = new_email
+
+    current_user.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@router.post("/change-password")
+def change_password(
+    req: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not auth_service.verify_password(req.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña actual no es correcta")
+
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La nueva contraseña debe tener al menos 6 caracteres")
+
+    current_user.hashed_password = auth_service.get_password_hash(req.new_password)
+    current_user.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Contraseña actualizada correctamente"}
+
+
+@router.post("/mfa/disable")
+def disable_mfa(
+    totp_code: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.mfa_enabled:
+        return {"message": "2FA ya estaba desactivado"}
+    
+    if not current_user.mfa_secret or not auth_service.verify_totp(current_user.mfa_secret, totp_code.strip()):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Código TOTP no válido para desactivar 2FA")
+
+    current_user.mfa_enabled = False
+    current_user.mfa_secret = None
+    current_user.mfa_recovery_codes = None
+    db.commit()
+    return {"message": "Doble factor desactivado"}
 
 
 @router.get("/preferences", response_model=UserPreferencesSchema)

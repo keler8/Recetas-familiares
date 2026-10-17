@@ -24,6 +24,14 @@ class DinerRestrictionSchema(BaseModel):
 class DinerBase(BaseModel):
     name: str
     is_active: bool = True
+    sex: Optional[str] = None  # hombre, mujer
+    age: Optional[int] = None
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+    activity_level: Optional[str] = None  # sedentario, ligero, moderado, intenso
+    dietary_goal: Optional[str] = None  # deficit, mantenimiento, superavit, saludable
+    target_calories: Optional[int] = None
+    calorie_offset: Optional[int] = 0
     notes: Optional[str] = None
 
 
