@@ -1,5 +1,6 @@
 from typing import Optional, List
 from datetime import date, datetime
+import datetime as dt
 from pydantic import BaseModel
 
 
@@ -85,3 +86,46 @@ class LeftoverResponse(LeftoverCreate):
 
     class Config:
         from_attributes = True
+
+
+class NutritionPlanIngredient(BaseModel):
+    name: str
+    amount: Optional[float] = None
+    unit: Optional[str] = None
+
+
+class NutritionPlanStep(BaseModel):
+    step_number: int
+    instruction: str
+
+
+class NutritionPlanMeal(BaseModel):
+    meal_type: str  # desayuno, almuerzo, comida, merienda, cena, snacks
+    title: str
+    calories: Optional[float] = None
+    is_recipe: bool = False
+    recipe_id: Optional[int] = None
+    matched_recipe_title: Optional[str] = None
+    is_existing: bool = False
+    description: Optional[str] = None
+    ingredients: List[NutritionPlanIngredient] = []
+    steps: List[NutritionPlanStep] = []
+
+
+class NutritionPlanDay(BaseModel):
+    day_name: str
+    date: Optional[dt.date] = None
+    meals: List[NutritionPlanMeal] = []
+
+
+class NutritionPlanParsedResponse(BaseModel):
+    plan_title: str
+    notes: Optional[str] = None
+    days: List[NutritionPlanDay] = []
+
+
+class ApplyNutritionPlanRequest(BaseModel):
+    start_date: dt.date
+    create_missing_recipes: bool = True
+    plan_title: Optional[str] = None
+    days: List[NutritionPlanDay] = []

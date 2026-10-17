@@ -42,7 +42,7 @@ export const AdminPage: React.FC = () => {
 
   // Connectors State
   const [connectors, setConnectors] = useState<any>({
-    gemini: { api_key: '', model: 'gemini-2.5-flash', is_configured: false, status: '' },
+    gemini: { api_key: '', model: 'gemini-3.8-flash', is_configured: false, status: '' },
     drive: { client_id: '', client_secret: '', redirect_uri: 'http://192.168.1.80:8500/api/drive/callback', is_configured: false, status: '' },
     synology: { host: '192.168.1.8', port: 5000, user: '', password: '', backup_path: '/volume1/Backups/Recetario', is_configured: false, status: '' },
     telegram: { is_active: false, bot_token: '', chat_id: '', is_configured: false, status: '' },
@@ -1020,16 +1020,16 @@ export const AdminPage: React.FC = () => {
                   <div>
                     <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 block mb-1">Modelo</label>
                     <select
-                      value={connectors.gemini?.model || 'gemini-2.5-flash'}
+                      value={connectors.gemini?.model || 'gemini-3.8-flash'}
                       onChange={e => setConnectors({
                         ...connectors,
                         gemini: { ...connectors.gemini, model: e.target.value }
                       })}
                       className="w-full px-3.5 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white"
                     >
-                      <option value="gemini-2.5-flash">gemini-2.5-flash (Recomendado - Ultrarrápido)</option>
-                      <option value="gemini-1.5-flash">gemini-1.5-flash (Económico)</option>
-                      <option value="gemini-1.5-pro">gemini-1.5-pro (Máxima capacidad)</option>
+                      <option value="gemini-3.8-flash">gemini-3.8-flash (Recomendado - Ultrarrápido y Multimodal)</option>
+                      <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Ligero y Alta velocidad)</option>
+                      <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Máxima precisión y razonamiento)</option>
                     </select>
                   </div>
 

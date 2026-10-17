@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import {
   Calendar as CalendarIcon, Sparkles, Plus, Clock,
   ChevronLeft, ChevronRight, CheckCircle, Utensils,
-  Package, Trash2, ArrowRight, Flame, Search, X, Apple, Coffee, Sun, Moon, ShoppingBag
+  Package, Trash2, ArrowRight, Flame, Search, X, Apple, Coffee, Sun, Moon, ShoppingBag,
+  Camera, UploadCloud, FileText, Check, AlertCircle, RefreshCw, ChefHat, BookOpen
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -27,6 +28,17 @@ export const PlannerPage: React.FC = () => {
 
   // Week offset state
   const [weekOffset, setWeekOffset] = useState(0);
+
+  // Photo Scan Nutrition Plan State
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [scanFile, setScanFile] = useState<File | null>(null);
+  const [scanPreview, setScanPreview] = useState<string | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [parsedPlan, setParsedPlan] = useState<any | null>(null);
+  const [createMissingRecipes, setCreateMissingRecipes] = useState(true);
+  const [isApplyingPlan, setIsApplyingPlan] = useState(false);
+  const [scanSuccessMessage, setScanSuccessMessage] = useState<string | null>(null);
 
   // Add Item / Recipe Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -243,6 +255,94 @@ export const PlannerPage: React.FC = () => {
     }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setScanFile(file);
+      setScanError(null);
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => setScanPreview(reader.result as string);
+        reader.readAsDataURL(file);
+      } else {
+        setScanPreview(null);
+      }
+    }
+  };
+
+  const handleScanNutritionPlan = async () => {
+    if (!scanFile) {
+      setScanError('Por favor selecciona una foto o documento de tu plan nutricional.');
+      return;
+    }
+    setIsScanning(true);
+    setScanError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', scanFile);
+      formData.append('start_date', weekDays[0].isoDate);
+      const data = await apiRequest('/meal-plans/import-nutrition-image', {
+        method: 'POST',
+        body: formData
+      });
+      setParsedPlan(data);
+    } catch (err: any) {
+      setScanError(err.message || 'Error al analizar la imagen con IA');
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const handleApplyNutritionPlan = async () => {
+    if (!parsedPlan) return;
+    setIsApplyingPlan(true);
+    try {
+      const res = await apiRequest('/meal-plans/apply-imported-nutrition-plan', {
+        method: 'POST',
+        body: JSON.stringify({
+          start_date: weekDays[0].isoDate,
+          create_missing_recipes: createMissingRecipes,
+          plan_title: parsedPlan.plan_title,
+          days: parsedPlan.days
+        })
+      });
+      setScanSuccessMessage(
+        res.recipes_created > 0
+          ? `¡Plan aplicado! Se importó la semana y se crearon ${res.recipes_created} nuevas recetas en tu recetario.`
+          : `¡Plan semanal aplicado con éxito!`
+      );
+      await fetchPlans();
+      await fetchRecipesAndProfile();
+      setTimeout(() => {
+        setShowScanModal(false);
+        setParsedPlan(null);
+        setScanFile(null);
+        setScanPreview(null);
+        setScanSuccessMessage(null);
+      }, 2000);
+    } catch (err: any) {
+      setScanError(err.message || 'Error al aplicar el plan semanal');
+    } finally {
+      setIsApplyingPlan(false);
+    }
+  };
+
+  const handleUpdateParsedMeal = (dayIdx: number, mealIdx: number, field: string, value: any) => {
+    if (!parsedPlan) return;
+    const updatedDays = [...parsedPlan.days];
+    const updatedMeals = [...updatedDays[dayIdx].meals];
+    updatedMeals[mealIdx] = { ...updatedMeals[mealIdx], [field]: value };
+    updatedDays[dayIdx] = { ...updatedDays[dayIdx], meals: updatedMeals };
+    setParsedPlan({ ...parsedPlan, days: updatedDays });
+  };
+
+  const handleDeleteParsedMeal = (dayIdx: number, mealIdx: number) => {
+    if (!parsedPlan) return;
+    const updatedDays = [...parsedPlan.days];
+    updatedDays[dayIdx].meals = updatedDays[dayIdx].meals.filter((_: any, i: number) => i !== mealIdx);
+    setParsedPlan({ ...parsedPlan, days: updatedDays });
+  };
+
   // Helper to extract items for a given date and meal_type from active plan
   const getSlotItems = (isoDate: string, mealType: string) => {
     if (!activePlan || !activePlan.slots) return [];
@@ -283,7 +383,21 @@ export const PlannerPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => {
+              setShowScanModal(true);
+              setParsedPlan(null);
+              setScanFile(null);
+              setScanPreview(null);
+              setScanError(null);
+            }}
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-amber-500/50 text-slate-800 dark:text-zinc-200 font-bold text-xs shadow-sm hover:shadow transition-all"
+          >
+            <Camera className="w-4 h-4 text-amber-500" />
+            <span>📸 Escanear Plan desde Foto</span>
+          </button>
+
           <button
             onClick={handleGenerateAiMenu}
             disabled={isGenerating}
@@ -731,6 +845,336 @@ export const PlannerPage: React.FC = () => {
                 Guardar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Scan Nutrition Plan Photo */}
+      {showScanModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 md:p-6 overflow-y-auto">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 md:p-6 max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl space-y-4">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base md:text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+                    Escanear Plan Nutricional con IA
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-zinc-950 uppercase tracking-wider">
+                      Gemini Vision
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">
+                    Sube una foto de tu dieta o menú impreso para importar la semana completa y guardar sus recetas
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowScanModal(false);
+                  setParsedPlan(null);
+                  setScanFile(null);
+                  setScanPreview(null);
+                  setScanError(null);
+                }}
+                className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Success Notification */}
+            {scanSuccessMessage && (
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center gap-3 text-xs font-bold animate-in fade-in">
+                <CheckCircle className="w-5 h-5 flex-shrink-0" />
+                <span>{scanSuccessMessage}</span>
+              </div>
+            )}
+
+            {/* Error Notification */}
+            {scanError && (
+              <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center gap-2.5 text-xs font-semibold">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{scanError}</span>
+              </div>
+            )}
+
+            {/* Step 1: Upload & Options */}
+            {!parsedPlan && !scanSuccessMessage && (
+              <div className="space-y-4 py-2 overflow-y-auto">
+                {/* File Dropzone */}
+                <div className="border-2 border-dashed border-slate-200 dark:border-zinc-800 hover:border-amber-500/50 rounded-3xl p-6 text-center transition-colors bg-slate-50/50 dark:bg-zinc-950/50">
+                  {scanPreview ? (
+                    <div className="space-y-3">
+                      <div className="relative inline-block max-w-xs max-h-56 rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 shadow-md">
+                        <img src={scanPreview} alt="Vista previa del plan" className="w-full h-auto object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => { setScanFile(null); setScanPreview(null); }}
+                          className="absolute top-2 right-2 p-1.5 rounded-xl bg-black/60 text-white hover:bg-rose-600 transition-colors"
+                          title="Quitar foto"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                        {scanFile?.name} ({(scanFile ? scanFile.size / 1024 : 0).toFixed(1)} KB)
+                      </p>
+                    </div>
+                  ) : (
+                    <label className="cursor-pointer flex flex-col items-center gap-3">
+                      <div className="w-14 h-14 rounded-3xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shadow-inner">
+                        <UploadCloud className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <span className="text-xs md:text-sm font-bold text-slate-900 dark:text-white block">
+                          Pulsa para seleccionar o hacer una foto de tu plan nutricional
+                        </span>
+                        <span className="text-[11px] text-slate-500 dark:text-zinc-400 block mt-0.5">
+                          Formatos aceptados: Fotos de cámara, JPG, PNG, WEBP o documentos PDF
+                        </span>
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf"
+                        capture="environment"
+                        onChange={handleFileChange}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Target Week & Preferences */}
+                <div className="p-4 rounded-2xl bg-slate-100/70 dark:bg-zinc-800/50 border border-slate-200/80 dark:border-zinc-700/60 space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-slate-600 dark:text-zinc-300">Semana objetivo:</span>
+                    <span className="font-bold text-slate-900 dark:text-white bg-white dark:bg-zinc-900 px-3 py-1 rounded-xl border border-slate-200 dark:border-zinc-700">
+                      Semana {weekDays[0].displayDate} al {weekDays[6].displayDate}
+                    </span>
+                  </div>
+
+                  <label className="flex items-start gap-3 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={createMissingRecipes}
+                      onChange={(e) => setCreateMissingRecipes(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 text-amber-500 rounded border-slate-300 dark:border-zinc-700 focus:ring-amber-500 accent-amber-500"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 dark:text-white block">
+                        Añadir automáticamente las recetas nuevas a mi recetario
+                      </span>
+                      <span className="text-[11px] text-slate-500 dark:text-zinc-400 block mt-0.5 leading-relaxed">
+                        Si el plan contiene platos cocinados (guisos, pescados al horno, tortillas, etc.) que no tienes en tu colección, la IA creará su ficha completa con ingredientes y pasos para que puedas volver a cocinarlas cuando quieras.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Modal Footer Step 1 */}
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowScanModal(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleScanNutritionPlan}
+                    disabled={!scanFile || isScanning}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 disabled:opacity-50 transition-all"
+                  >
+                    {isScanning ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Analizando con Visión Multimodal...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4 fill-zinc-950" />
+                        <span>Analizar Plan con IA</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2: Interactive Review */}
+            {parsedPlan && !scanSuccessMessage && (
+              <div className="space-y-4 py-1 overflow-y-auto flex-1 pr-1">
+                {/* Plan Title & Notes Header */}
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block mb-0.5">
+                        Título del Plan Nutricional
+                      </label>
+                      <input
+                        type="text"
+                        value={parsedPlan.plan_title}
+                        onChange={(e) => setParsedPlan({ ...parsedPlan, plan_title: e.target.value })}
+                        className="w-full px-3 py-1.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 pt-3 sm:pt-0">
+                      <span className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400">
+                        {parsedPlan.days?.length || 0} Días detectados
+                      </span>
+                    </div>
+                  </div>
+
+                  {parsedPlan.notes && (
+                    <div className="text-[11px] text-slate-600 dark:text-zinc-300 bg-amber-500/5 p-2 rounded-xl border border-amber-500/15">
+                      <span className="font-bold text-amber-600 dark:text-amber-400">📌 Observaciones: </span>
+                      {parsedPlan.notes}
+                    </div>
+                  )}
+                </div>
+
+                {/* Days and Meals List */}
+                <div className="space-y-3">
+                  {parsedPlan.days?.map((day: any, dayIdx: number) => (
+                    <div key={dayIdx} className="p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-sm space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <CalendarIcon className="w-3.5 h-3.5 text-amber-500" />
+                          {day.day_name} ({day.date ? new Date(day.date).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) : `Día ${dayIdx + 1}`})
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-semibold">
+                          {day.meals?.length || 0} comidas
+                        </span>
+                      </div>
+
+                      <div className="space-y-2">
+                        {day.meals?.map((meal: any, mealIdx: number) => (
+                          <div
+                            key={mealIdx}
+                            className="p-2.5 rounded-xl bg-slate-50/80 dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800/80 flex flex-col md:flex-row md:items-center justify-between gap-2 text-xs"
+                          >
+                            <div className="flex items-center gap-2 flex-1">
+                              {/* Meal Type badge */}
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 uppercase tracking-wider flex-shrink-0">
+                                {meal.meal_type}
+                              </span>
+
+                              {/* Title input */}
+                              <input
+                                type="text"
+                                value={meal.title}
+                                onChange={(e) => handleUpdateParsedMeal(dayIdx, mealIdx, 'title', e.target.value)}
+                                className="flex-1 px-2.5 py-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg text-xs text-slate-900 dark:text-white font-medium"
+                              />
+                            </div>
+
+                            <div className="flex items-center gap-2 justify-between md:justify-end">
+                              {/* Calories input */}
+                              <div className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-zinc-400 flex-shrink-0">
+                                <Flame className="w-3.5 h-3.5 text-amber-500" />
+                                <input
+                                  type="number"
+                                  value={meal.calories || ''}
+                                  onChange={(e) => handleUpdateParsedMeal(dayIdx, mealIdx, 'calories', e.target.value ? Number(e.target.value) : null)}
+                                  placeholder="kcal"
+                                  className="w-14 px-2 py-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-lg text-xs text-slate-900 dark:text-white text-center font-bold"
+                                />
+                                <span className="text-[10px]">kcal</span>
+                              </div>
+
+                              {/* Status Badge */}
+                              {meal.is_existing ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 whitespace-nowrap" title="Se vinculará a la receta existente de tu recetario">
+                                  ✓ En recetario
+                                </span>
+                              ) : meal.is_recipe ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 whitespace-nowrap" title="Se creará la receta completa en tu recetario">
+                                  ✨ Nueva receta
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 whitespace-nowrap">
+                                  ⚡ Snack / Alimento
+                                </span>
+                              )}
+
+                              {/* Toggle Recipe vs Direct Food */}
+                              {!meal.is_existing && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateParsedMeal(dayIdx, mealIdx, 'is_recipe', !meal.is_recipe)}
+                                  className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-500"
+                                  title={meal.is_recipe ? 'Cambiar a alimento directo sin receta' : 'Cambiar a receta completa'}
+                                >
+                                  {meal.is_recipe ? <ChefHat className="w-3.5 h-3.5 text-blue-500" /> : <Apple className="w-3.5 h-3.5 text-amber-500" />}
+                                </button>
+                              )}
+
+                              {/* Delete button */}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteParsedMeal(dayIdx, mealIdx)}
+                                className="p-1 rounded-lg hover:bg-rose-500/10 text-slate-400 hover:text-rose-500 transition-colors"
+                                title="Quitar del plan"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Confirm Options & Footer Step 2 */}
+                <div className="pt-2 border-t border-slate-100 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={createMissingRecipes}
+                      onChange={(e) => setCreateMissingRecipes(e.target.checked)}
+                      className="w-4 h-4 text-amber-500 rounded border-slate-300 dark:border-zinc-700 focus:ring-amber-500 accent-amber-500"
+                    />
+                    <span>Guardar nuevas recetas en el recetario</span>
+                  </label>
+
+                  <div className="flex items-center gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setParsedPlan(null)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+                    >
+                      ← Subir otra foto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleApplyNutritionPlan}
+                      disabled={isApplyingPlan}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 disabled:opacity-50 transition-all"
+                    >
+                      {isApplyingPlan ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Aplicando y creando recetas...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4 stroke-[3]" />
+                          <span>Confirmar y Aplicar a mi Menú Semanal</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
       )}

@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # Gemini AI
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
     AI_ESTIMATED_MONTHLY_BUDGET: float = 10.0
 
     # Google Drive OAuth
