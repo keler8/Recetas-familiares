@@ -170,3 +170,48 @@ def add_diner(
     db.commit()
     db.refresh(diner)
     return DinerResponse.model_validate(diner)
+
+
+@router.put("/diners/{diner_id}", response_model=DinerResponse)
+def update_diner(
+    diner_id: int,
+    d_in: DinerCreate,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    diner = db.query(Diner).filter(Diner.id == diner_id, Diner.household_id == household.id).first()
+    if not diner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Persona/Comensal no encontrado")
+
+    diner.name = d_in.name
+    diner.is_active = d_in.is_active
+    diner.notes = d_in.notes
+
+    # Replace preferences and restrictions
+    db.query(DinerPreference).filter(DinerPreference.diner_id == diner.id).delete()
+    db.query(DinerRestriction).filter(DinerRestriction.diner_id == diner.id).delete()
+
+    for p in d_in.preferences:
+        db.add(DinerPreference(diner_id=diner.id, preference_type=p.preference_type, ingredient_name=p.ingredient_name))
+    for r in d_in.restrictions:
+        db.add(DinerRestriction(diner_id=diner.id, restriction_type=r.restriction_type, details=r.details))
+
+    db.commit()
+    db.refresh(diner)
+    return DinerResponse.model_validate(diner)
+
+
+@router.delete("/diners/{diner_id}")
+def delete_diner(
+    diner_id: int,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    diner = db.query(Diner).filter(Diner.id == diner_id, Diner.household_id == household.id).first()
+    if not diner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Persona/Comensal no encontrado")
+
+    db.delete(diner)
+    db.commit()
+    return {"message": "Persona eliminada del hogar"}
+

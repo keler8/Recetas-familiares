@@ -3,9 +3,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
+from app.models.auth import User
 from app.models.household import Household
 from app.models.recipe import Recipe
 from app.models.meal_plan import MealPlan, MealSlot, PlannedRecipe, Leftover
+from app.models.nutrition import NutritionProfile
 from app.schemas.meal_plan import (
     MealPlanCreate, MealPlanResponse, AddRecipeToSlotRequest,
     AiMenuGenerateRequest, LeftoverCreate, LeftoverResponse
@@ -86,6 +88,7 @@ def add_recipe_to_slot(
 def generate_ai_menu(
     req: AiMenuGenerateRequest,
     household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # Fetch approved recipes
@@ -98,12 +101,21 @@ def generate_ai_menu(
         for r in diner.restrictions:
             restrictions.append(f"{diner.name}: {r.restriction_type} ({r.details})")
 
+    # Gather user nutrition profile & habits
+    nut_profile = db.query(NutritionProfile).filter(NutritionProfile.user_id == current_user.id).first()
+
     prefs = {
         "focus_healthy": req.focus_healthy,
         "quick_meals_only": req.quick_meals_only,
         "use_pantry_items": req.use_pantry_items,
         "appliances": req.appliances,
-        "restrictions": restrictions
+        "restrictions": restrictions,
+        "dietary_goals": nut_profile.dietary_goals if nut_profile else None,
+        "cooking_habits": nut_profile.cooking_habits if nut_profile else None,
+        "preferred_foods": nut_profile.preferred_foods if nut_profile else None,
+        "excluded_foods": nut_profile.excluded_foods if nut_profile else None,
+        "available_time_min": nut_profile.available_time_min if nut_profile else 45,
+        "notes": nut_profile.notes if nut_profile else None
     }
 
     proposals = gemini_service.generate_meal_plan_suggestions(recipes_data, prefs)

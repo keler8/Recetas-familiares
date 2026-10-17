@@ -126,25 +126,25 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+      <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
         
         {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-zinc-800 flex items-center justify-between bg-zinc-950/60">
+        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50/80 dark:bg-zinc-950/60">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
               <Bot className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 Asistente Dietético Familiar
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">IA Saludable</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">IA Saludable</span>
               </h2>
-              <p className="text-xs text-zinc-400">Nutrición preventiva, sustituciones saludables y adaptación culinaria</p>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">Nutrición preventiva, sustituciones saludables y adaptación culinaria</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -155,8 +155,8 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
           
           {/* Section 1: Diet Goal Selector */}
           <div className="space-y-2.5">
-            <label className="text-xs font-semibold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-              <Heart className="w-3.5 h-3.5 text-rose-400" />
+            <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
+              <Heart className="w-3.5 h-3.5 text-rose-500" />
               1. Enfoque o Tipo de Dieta Familiar
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -167,8 +167,8 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
                   onClick={() => setDietaryGoal(d.id)}
                   className={`text-left p-2.5 rounded-xl border text-xs font-medium transition-all ${
                     dietaryGoal === d.id
-                      ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300 font-semibold shadow-sm'
-                      : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-300 hover:border-zinc-600'
+                      ? 'bg-emerald-500/15 border-emerald-500 text-emerald-700 dark:text-emerald-300 font-semibold shadow-sm'
+                      : 'bg-slate-50 dark:bg-zinc-800/60 border-slate-200 dark:border-zinc-700/60 text-slate-700 dark:text-zinc-300 hover:border-slate-300 dark:hover:border-zinc-600'
                   }`}
                 >
                   {d.label}
@@ -181,20 +181,20 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
               value={customGoal}
               onChange={(e) => setCustomGoal(e.target.value)}
               placeholder="Añadir notas particulares (ej. 'Mi hijo no toma lactosa y queremos cenar sin fritos')..."
-              className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
+              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
             />
           </div>
 
           {/* Section 2: Recipe target (optional) */}
           <div className="space-y-2">
-            <label className="text-xs font-semibold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-              <ChefHat className="w-3.5 h-3.5 text-amber-400" />
+            <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
+              <ChefHat className="w-3.5 h-3.5 text-amber-500" />
               2. ¿Deseas adaptar una receta existente? (Opcional)
             </label>
             <select
               value={selectedRecipeId || ''}
               onChange={(e) => setSelectedRecipeId(e.target.value ? Number(e.target.value) : undefined)}
-              className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500 transition-colors"
             >
               <option value="">-- Ninguna (Consulta general o pedir nueva recomendación) --</option>
               {recipes.map(r => (
@@ -207,26 +207,26 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
 
           {/* Assistant Response Card */}
           {response && (
-            <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950 border border-emerald-500/30 space-y-4 animate-in fade-in">
-              <div className="flex items-center gap-2 text-emerald-400 text-xs font-bold uppercase tracking-wider">
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-emerald-500/30 space-y-4 animate-in fade-in">
+              <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 text-xs font-bold uppercase tracking-wider">
                 <Sparkles className="w-4 h-4" />
                 Diagnóstico y Consejo Dietético
               </div>
 
-              <div className="text-sm text-zinc-200 leading-relaxed whitespace-pre-line bg-zinc-900/50 p-3.5 rounded-xl border border-zinc-800/80">
+              <div className="text-sm text-slate-800 dark:text-zinc-200 leading-relaxed whitespace-pre-line bg-white dark:bg-zinc-900/50 p-3.5 rounded-xl border border-slate-200 dark:border-zinc-800/80">
                 {response.advice}
               </div>
 
               {response.suggested_modifications?.length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-xs font-bold text-amber-400 flex items-center gap-1.5 uppercase">
+                  <h4 className="text-xs font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5 uppercase">
                     <Flame className="w-3.5 h-3.5" />
                     Sustituciones Saludables Propuestas:
                   </h4>
                   <ul className="space-y-1.5">
                     {response.suggested_modifications.map((mod: string, idx: number) => (
-                      <li key={idx} className="flex items-start gap-2 text-xs text-zinc-300">
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                      <li key={idx} className="flex items-start gap-2 text-xs text-slate-700 dark:text-zinc-300">
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-500 mt-0.5 shrink-0" />
                         <span>{mod}</span>
                       </li>
                     ))}
@@ -235,11 +235,11 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
               )}
 
               {response.healthy_recipe_variant && (
-                <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/20 space-y-3">
+                <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-500/20 space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h4 className="text-sm font-bold text-white">{response.healthy_recipe_variant.title}</h4>
-                      <p className="text-xs text-zinc-400">{response.healthy_recipe_variant.description}</p>
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white">{response.healthy_recipe_variant.title}</h4>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400">{response.healthy_recipe_variant.description}</p>
                     </div>
                     <button
                       type="button"
@@ -254,8 +254,8 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
                 </div>
               )}
 
-              <p className="text-[11px] text-zinc-500 flex items-center gap-1 italic">
-                <AlertCircle className="w-3 h-3 text-zinc-600 shrink-0" />
+              <p className="text-[11px] text-slate-500 dark:text-zinc-500 flex items-center gap-1 italic">
+                <AlertCircle className="w-3 h-3 text-slate-400 dark:text-zinc-600 shrink-0" />
                 {response.disclaimer}
               </p>
             </div>
@@ -264,26 +264,26 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
           {/* Quick Prompts */}
           {!response && !loading && (
             <div className="space-y-2">
-              <p className="text-xs text-zinc-400 font-medium">Sugerencias rápidas:</p>
+              <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">Sugerencias rápidas:</p>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => handleAskAssistant('¿Qué puedo cenar hoy ligero y saludable con verduras y proteína?')}
-                  className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700 text-xs transition-colors"
+                  className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 text-xs transition-colors"
                 >
                   💡 Cena ligera y saludable para hoy
                 </button>
                 <button
                   type="button"
                   onClick={() => handleAskAssistant('Cómo reducir las calorías de mis platos habituales sin perder sabor')}
-                  className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700 text-xs transition-colors"
+                  className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 text-xs transition-colors"
                 >
                   🔥 Reducir calorías manteniendo sabor
                 </button>
                 <button
                   type="button"
                   onClick={() => handleAskAssistant('Ideas para incorporar más legumbres y fibra en la dieta familiar')}
-                  className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700 text-xs transition-colors"
+                  className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 text-xs transition-colors"
                 >
                   🥗 Aumentar legumbres y fibra
                 </button>
@@ -294,14 +294,14 @@ export const DietaryAssistantModal: React.FC<DietaryAssistantModalProps> = ({
         </div>
 
         {/* Footer Input */}
-        <div className="p-3 sm:p-4 border-t border-zinc-800 bg-zinc-950 flex items-center gap-2">
+        <div className="p-3 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50/80 dark:bg-zinc-950 flex items-center gap-2">
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleAskAssistant()}
             placeholder="Escribe tu consulta dietética o pide una receta saludable..."
-            className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
+            className="flex-1 px-4 py-2.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
           />
           <button
             type="button"
