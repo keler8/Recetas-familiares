@@ -1,10 +1,14 @@
+import os
+import uuid
 import json
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
+from app.config import settings
 from app.database import get_db
 from app.models.auth import User
 from app.models.recipe import (
@@ -114,6 +118,8 @@ def _format_recipe_response(recipe: Recipe, current_user_id: int, db: Session) -
         created_by_id=recipe.created_by_id,
         created_at=recipe.created_at,
         updated_at=recipe.updated_at,
+        is_private=bool(recipe.is_private),
+        is_owner=(recipe.created_by_id == current_user_id) if (recipe.created_by_id and current_user_id) else False,
         variants=variants_resp,
         ratings=ratings_resp,
         average_rating=round(float(avg_rating), 1) if avg_rating else None,
@@ -132,10 +138,26 @@ def list_recipes(
     difficulty: Optional[str] = Query(None),
     appliance: Optional[str] = Query(None, description="Thermomix, Airfryer, Tradicional"),
     favorites_only: bool = Query(False),
+    visibility: Optional[str] = Query("all", description="all, public, private"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     query = db.query(Recipe).filter(Recipe.review_status == "approved")
+
+    # Visibility & privacy filtering:
+    # A user can only see public recipes OR recipes they created.
+    if visibility == "private":
+        query = query.filter(Recipe.is_private == True, Recipe.created_by_id == current_user.id)
+    elif visibility == "public":
+        query = query.filter(Recipe.is_private == False)
+    else:
+        # "all" - public recipes OR own private recipes
+        query = query.filter(
+            or_(
+                Recipe.is_private == False,
+                Recipe.created_by_id == current_user.id
+            )
+        )
 
     if search:
         search_pattern = f"%{search.strip()}%"
@@ -174,6 +196,45 @@ def list_recipes(
     return [_format_recipe_response(r, current_user.id, db) for r in recipes]
 
 
+@router.get("/suggest-images")
+def suggest_recipe_images_general(
+    query: Optional[str] = Query(None, description="Término de búsqueda opcional"),
+    title: Optional[str] = Query(None, description="Título del plato"),
+    dish_type: Optional[str] = Query(None),
+    cuisine: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+):
+    search_term = query.strip() if (query and query.strip()) else (title.strip() if title else "")
+    if not search_term:
+        return {"candidates": [], "query": ""}
+    candidates = gemini_service.get_food_image_candidates(
+        title=search_term,
+        dish_type=dish_type,
+        cuisine=cuisine,
+        count=12
+    )
+    return {"candidates": candidates, "query": search_term}
+
+
+@router.post("/upload-image")
+async def upload_recipe_image_general(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    file_ext = os.path.splitext(file.filename or "")[1].lower() or ".jpg"
+    img_name = f"recipe_{uuid.uuid4().hex[:12]}{file_ext}"
+    recipes_dir = os.path.join(settings.STORAGE_PATH, "recipes")
+    os.makedirs(recipes_dir, exist_ok=True)
+    filepath = os.path.join(recipes_dir, img_name)
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    img_url = f"/api/media/recipes/{img_name}"
+    return {"image_url": img_url}
+
+
 @router.get("/{recipe_id}", response_model=RecipeResponse)
 def get_recipe_detail(
     recipe_id: int,
@@ -183,7 +244,63 @@ def get_recipe_detail(
     recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
     if not recipe:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
     return _format_recipe_response(recipe, current_user.id, db)
+
+
+@router.get("/{recipe_id}/suggest-images")
+def suggest_recipe_images_for_id(
+    recipe_id: int,
+    query: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
+    search_term = query.strip() if (query and query.strip()) else recipe.title
+    candidates = gemini_service.get_food_image_candidates(
+        title=search_term,
+        dish_type=recipe.dish_type,
+        cuisine=recipe.cuisine,
+        count=12
+    )
+    return {"candidates": candidates, "query": search_term}
+
+
+@router.post("/{recipe_id}/upload-image")
+async def upload_recipe_image_for_id(
+    recipe_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
+    file_ext = os.path.splitext(file.filename or "")[1].lower() or ".jpg"
+    img_name = f"recipe_{recipe_id}_{uuid.uuid4().hex[:8]}{file_ext}"
+    recipes_dir = os.path.join(settings.STORAGE_PATH, "recipes")
+    os.makedirs(recipes_dir, exist_ok=True)
+    filepath = os.path.join(recipes_dir, img_name)
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    img_url = f"/api/media/recipes/{img_name}"
+    recipe.main_image_url = img_url
+    recipe.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(recipe)
+    return {"image_url": img_url}
 
 
 @router.post("", response_model=RecipeResponse)
@@ -192,6 +309,30 @@ def create_recipe(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    cal = recipe_in.nutrition_calories
+    prot = recipe_in.nutrition_protein
+    carbs = recipe_in.nutrition_carbs
+    fat = recipe_in.nutrition_fat
+
+    if cal is None or float(cal or 0) <= 0:
+        all_ings = []
+        for v in (recipe_in.variants or []):
+            for ing in v.ingredients:
+                all_ings.append({"name": ing.name, "amount": ing.amount, "unit": ing.unit, "notes": ing.notes})
+        try:
+            est = gemini_service.estimate_recipe_nutrition(
+                title=recipe_in.title,
+                ingredients=all_ings,
+                base_servings=recipe_in.base_servings,
+                dish_type=recipe_in.dish_type
+            )
+            cal = est.get("calories")
+            prot = est.get("protein")
+            carbs = est.get("carbs")
+            fat = est.get("fat")
+        except Exception as e:
+            logger.warning(f"Could not estimate nutrition on recipe create: {e}")
+
     recipe = Recipe(
         title=recipe_in.title,
         description=recipe_in.description,
@@ -213,15 +354,16 @@ def create_recipe(
         reheating_tips=recipe_in.reheating_tips,
         leftover_tips=recipe_in.leftover_tips,
         chef_notes=recipe_in.chef_notes,
-        nutrition_calories=recipe_in.nutrition_calories,
-        nutrition_protein=recipe_in.nutrition_protein,
-        nutrition_carbs=recipe_in.nutrition_carbs,
-        nutrition_fat=recipe_in.nutrition_fat,
+        nutrition_calories=cal,
+        nutrition_protein=prot,
+        nutrition_carbs=carbs,
+        nutrition_fat=fat,
         allergens=json.dumps(recipe_in.allergens or [], ensure_ascii=False),
         original_author=recipe_in.original_author,
         source_type=recipe_in.source_type,
         source_url=recipe_in.source_url,
         review_status="approved",
+        is_private=bool(recipe_in.is_private),
         created_by_id=current_user.id
     )
     db.add(recipe)
@@ -302,6 +444,9 @@ def update_recipe(
     if not recipe:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
 
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para modificar esta receta privada")
+
     # Snapshot for version history
     last_rev = db.query(func.max(RecipeRevision.version_num)).filter(RecipeRevision.recipe_id == recipe.id).scalar() or 1
     snapshot = {
@@ -349,12 +494,144 @@ def update_recipe(
         recipe.base_servings = recipe_up.base_servings
     if recipe_up.allergens is not None:
         recipe.allergens = json.dumps(recipe_up.allergens, ensure_ascii=False)
+    if recipe_up.source_url is not None:
+        recipe.source_url = recipe_up.source_url
+    if recipe_up.source_type is not None:
+        recipe.source_type = recipe_up.source_type
+    if recipe_up.is_private is not None:
+        recipe.is_private = recipe_up.is_private
+    if recipe_up.nutrition_calories is not None:
+        recipe.nutrition_calories = recipe_up.nutrition_calories
+    if recipe_up.nutrition_protein is not None:
+        recipe.nutrition_protein = recipe_up.nutrition_protein
+    if recipe_up.nutrition_carbs is not None:
+        recipe.nutrition_carbs = recipe_up.nutrition_carbs
+    if recipe_up.nutrition_fat is not None:
+        recipe.nutrition_fat = recipe_up.nutrition_fat
+    if recipe_up.equipment_notes is not None:
+        recipe.equipment_notes = recipe_up.equipment_notes
+    if recipe_up.preservation_tips is not None:
+        recipe.preservation_tips = recipe_up.preservation_tips
+    if recipe_up.freezing_tips is not None:
+        recipe.freezing_tips = recipe_up.freezing_tips
+    if recipe_up.reheating_tips is not None:
+        recipe.reheating_tips = recipe_up.reheating_tips
+    if recipe_up.leftover_tips is not None:
+        recipe.leftover_tips = recipe_up.leftover_tips
+    if recipe_up.chef_notes is not None:
+        recipe.chef_notes = recipe_up.chef_notes
+
+    # Update variants if provided
+    if recipe_up.variants:
+        for v_in in recipe_up.variants:
+            variant = next((v for v in recipe.variants if v.variant_type == v_in.variant_type), None)
+            if not variant and recipe.variants:
+                variant = recipe.variants[0]
+            if not variant:
+                variant = RecipeVariant(
+                    recipe_id=recipe.id,
+                    variant_type=v_in.variant_type or "traditional",
+                    title=v_in.title or "Preparación tradicional",
+                    is_default=True
+                )
+                db.add(variant)
+                db.flush()
+
+            variant.title = v_in.title or variant.title
+            variant.variant_type = v_in.variant_type or variant.variant_type
+            if v_in.description is not None:
+                variant.description = v_in.description
+
+            # Replace ingredients
+            db.query(RecipeIngredient).filter(RecipeIngredient.variant_id == variant.id).delete()
+            for idx, ing_in in enumerate(v_in.ingredients):
+                db.add(RecipeIngredient(
+                    variant_id=variant.id,
+                    name=ing_in.name,
+                    amount=ing_in.amount,
+                    unit=ing_in.unit,
+                    notes=ing_in.notes,
+                    is_optional=ing_in.is_optional,
+                    order_index=idx
+                ))
+
+            # Replace steps
+            db.query(RecipeStep).filter(RecipeStep.variant_id == variant.id).delete()
+            for s_in in v_in.steps:
+                db.add(RecipeStep(
+                    variant_id=variant.id,
+                    step_number=s_in.step_number,
+                    instruction=s_in.instruction,
+                    appliance_action=s_in.appliance_action,
+                    temperature=s_in.temperature,
+                    speed=s_in.speed,
+                    accessory=s_in.accessory,
+                    timer_seconds=s_in.timer_seconds,
+                    tip=s_in.tip,
+                    is_manual=s_in.is_manual
+                ))
+
+    if recipe.nutrition_calories is None or float(recipe.nutrition_calories or 0) <= 0:
+        variant = next((v for v in recipe.variants if v.is_default), recipe.variants[0] if recipe.variants else None)
+        ings_list = []
+        if variant:
+            for ing in variant.ingredients:
+                ings_list.append({"name": ing.name, "amount": ing.amount, "unit": ing.unit, "notes": ing.notes})
+        try:
+            est = gemini_service.estimate_recipe_nutrition(
+                title=recipe.title,
+                ingredients=ings_list,
+                base_servings=recipe.base_servings,
+                dish_type=recipe.dish_type
+            )
+            recipe.nutrition_calories = est.get("calories")
+            recipe.nutrition_protein = est.get("protein")
+            recipe.nutrition_carbs = est.get("carbs")
+            recipe.nutrition_fat = est.get("fat")
+        except Exception as e:
+            logger.warning(f"Could not auto-estimate nutrition on recipe update: {e}")
 
     recipe.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(recipe)
 
     return _format_recipe_response(recipe, current_user.id, db)
+
+
+@router.delete("/{recipe_id}")
+def delete_recipe(
+    recipe_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para eliminar esta receta privada")
+
+    # Clean up PlannedRecipe references by setting recipe_id to null and preserving title/calories
+    from app.models.meal_plan import PlannedRecipe, Leftover
+    from app.models.import_job import RecipeDraft
+
+    planned_items = db.query(PlannedRecipe).filter(PlannedRecipe.recipe_id == recipe_id).all()
+    for item in planned_items:
+        if not item.custom_recipe_name:
+            item.custom_recipe_name = recipe.title
+        if item.custom_calories is None and recipe.nutrition_calories:
+            item.custom_calories = recipe.nutrition_calories
+        item.recipe_id = None
+
+    db.query(Leftover).filter(Leftover.recipe_id == recipe_id).update({Leftover.recipe_id: None})
+    db.query(RecipeDraft).filter(RecipeDraft.approved_recipe_id == recipe_id).update({RecipeDraft.approved_recipe_id: None})
+    db.query(RecipeDraft).filter(RecipeDraft.duplicate_recipe_id == recipe_id).update({RecipeDraft.duplicate_recipe_id: None})
+
+    recipe_title = recipe.title
+    db.delete(recipe)
+    db.commit()
+
+    return {"message": f"Receta '{recipe_title}' eliminada correctamente", "id": recipe_id}
 
 
 @router.post("/{recipe_id}/generate-variant")
@@ -366,6 +643,8 @@ def generate_ai_appliance_variant(
 ):
     recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
     if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
 
     recipe_dict = {
@@ -429,6 +708,7 @@ def scale_recipe_servings(
     recipe_id: int,
     target_servings: int = Query(..., ge=1, le=24),
     variant_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -439,6 +719,8 @@ def scale_recipe_servings(
     """
     recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
     if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
 
     base = recipe.base_servings or 4
@@ -502,6 +784,10 @@ def rate_recipe(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe or (recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
     rating = db.query(RecipeRating).filter(
         RecipeRating.recipe_id == recipe_id,
         RecipeRating.user_id == current_user.id
@@ -530,6 +816,10 @@ def toggle_favorite(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe or (recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
     fav = db.query(RecipeFavorite).filter(
         RecipeFavorite.recipe_id == recipe_id,
         RecipeFavorite.user_id == current_user.id
@@ -552,6 +842,10 @@ def update_personal_note(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe or (recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
     note = db.query(RecipePersonalNote).filter(
         RecipePersonalNote.recipe_id == recipe_id,
         RecipePersonalNote.user_id == current_user.id
@@ -570,3 +864,116 @@ def update_personal_note(
     db.commit()
     db.refresh(note)
     return note
+
+
+class NutritionEstimateRequest(BaseModel):
+    title: str
+    ingredients: List[Dict[str, Any]] = []
+    base_servings: int = 4
+    dish_type: Optional[str] = None
+
+
+@router.post("/estimate-nutrition")
+def estimate_recipe_nutrition_endpoint(
+    req: NutritionEstimateRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Calculates realistic calories and macros per serving for given recipe data using Gemini AI."""
+    return gemini_service.estimate_recipe_nutrition(
+        title=req.title,
+        ingredients=req.ingredients,
+        base_servings=req.base_servings,
+        dish_type=req.dish_type
+    )
+
+
+@router.post("/{recipe_id}/recalculate-nutrition", response_model=RecipeResponse)
+def recalculate_recipe_nutrition_endpoint(
+    recipe_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Forces Gemini AI to recalculate calories and macronutrients for an existing recipe and saves to DB."""
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
+    variant = next((v for v in recipe.variants if v.is_default), recipe.variants[0] if recipe.variants else None)
+    ingredients = []
+    if variant:
+        for ing in variant.ingredients:
+            ingredients.append({"name": ing.name, "amount": ing.amount, "unit": ing.unit, "notes": ing.notes})
+
+    est = gemini_service.estimate_recipe_nutrition(
+        title=recipe.title,
+        ingredients=ingredients,
+        base_servings=recipe.base_servings,
+        dish_type=recipe.dish_type
+    )
+
+    recipe.nutrition_calories = est.get("calories")
+    recipe.nutrition_protein = est.get("protein")
+    recipe.nutrition_carbs = est.get("carbs")
+    recipe.nutrition_fat = est.get("fat")
+    recipe.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(recipe)
+    return _format_recipe_response(recipe, current_user.id, db)
+
+
+class RecipeTipsRequest(BaseModel):
+    title: str
+    ingredients: List[str] = []
+    dish_type: Optional[str] = None
+
+
+@router.post("/suggest-tips")
+def suggest_recipe_tips_endpoint(
+    req: RecipeTipsRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Generates culinary tips, chef secrets, preservation, freezing and reheating tips using Gemini AI."""
+    return gemini_service.suggest_recipe_tips(
+        title=req.title,
+        ingredients=req.ingredients,
+        dish_type=req.dish_type
+    )
+
+
+@router.post("/{recipe_id}/suggest-tips", response_model=RecipeResponse)
+def suggest_recipe_tips_for_id_endpoint(
+    recipe_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generates and saves culinary tips and chef notes for an existing recipe."""
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
+    variant = next((v for v in recipe.variants if v.is_default), recipe.variants[0] if recipe.variants else None)
+    ings = [ing.name for ing in variant.ingredients] if variant else []
+
+    tips = gemini_service.suggest_recipe_tips(
+        title=recipe.title,
+        ingredients=ings,
+        dish_type=recipe.dish_type
+    )
+
+    if tips.get("chef_notes"):
+        recipe.chef_notes = tips["chef_notes"]
+    if tips.get("preservation_tips"):
+        recipe.preservation_tips = tips["preservation_tips"]
+    if tips.get("freezing_tips"):
+        recipe.freezing_tips = tips["freezing_tips"]
+    if tips.get("reheating_tips"):
+        recipe.reheating_tips = tips["reheating_tips"]
+
+    recipe.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(recipe)
+    return _format_recipe_response(recipe, current_user.id, db)

@@ -1,15 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   User, Lock, Bell, Palette, Key, Shield, ShieldCheck,
   Save, Check, AlertCircle, RefreshCw, Send, CheckCircle2,
-  Smartphone, Mail, MessageSquare, Sun, Moon, Eye, EyeOff
+  Smartphone, Mail, MessageSquare, Sun, Moon, Eye, EyeOff,
+  HelpCircle, SlidersHorizontal, Calendar, Heart, ChefHat,
+  Flame, Zap, LayoutDashboard, ArrowRight
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { ConnectorInfoModal } from '../components/ConnectorInfoModal';
 
 type ProfileTab = 'account' | 'security' | 'notifications' | 'preferences';
+
+export interface WidgetsConfig {
+  showTodayPlan: boolean;
+  showDietAssistant: boolean;
+  showRecentRecipes: boolean;
+  showFavorites: boolean;
+  showAppliances: boolean;
+  showFunctionalAreas: boolean;
+}
+
+export const DEFAULT_WIDGETS: WidgetsConfig = {
+  showTodayPlan: true,
+  showDietAssistant: true,
+  showRecentRecipes: true,
+  showFavorites: true,
+  showAppliances: true,
+  showFunctionalAreas: true
+};
 
 export const ProfilePage: React.FC = () => {
   const { user } = useAuth();
@@ -19,7 +40,7 @@ export const ProfilePage: React.FC = () => {
   const getTabFromParam = (tab: string | null): ProfileTab => {
     if (tab === 'security' || tab === 'password') return 'security';
     if (tab === 'notifications') return 'notifications';
-    if (tab === 'preferences') return 'preferences';
+    if (tab === 'preferences' || tab === 'homepage' || tab === 'inicio') return 'preferences';
     return 'account';
   };
 
@@ -63,6 +84,17 @@ export const ProfilePage: React.FC = () => {
   });
   const [isSavingPrefs, setIsSavingPrefs] = useState(false);
   const [prefsSaved, setPrefsSaved] = useState(false);
+  const [showTelegramGuide, setShowTelegramGuide] = useState(false);
+
+  // Homepage Customization Widgets state
+  const [widgets, setWidgets] = useState<WidgetsConfig>(() => {
+    try {
+      const saved = localStorage.getItem('homepage_widgets');
+      return saved ? { ...DEFAULT_WIDGETS, ...JSON.parse(saved) } : DEFAULT_WIDGETS;
+    } catch {
+      return DEFAULT_WIDGETS;
+    }
+  });
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -87,6 +119,15 @@ export const ProfilePage: React.FC = () => {
               ? JSON.parse(prefs.notification_channels)
               : prefs.notification_channels;
             setNotificationChannels(prev => ({ ...prev, ...parsed }));
+          } catch {}
+        }
+        if (prefs.widgets_config) {
+          try {
+            const parsed = typeof prefs.widgets_config === 'string'
+              ? JSON.parse(prefs.widgets_config)
+              : prefs.widgets_config;
+            setWidgets(prev => ({ ...DEFAULT_WIDGETS, ...parsed }));
+            localStorage.setItem('homepage_widgets', JSON.stringify(parsed));
           } catch {}
         }
       }
@@ -195,16 +236,39 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
+  const handleToggleWidget = (key: keyof WidgetsConfig) => {
+    setWidgets(prev => {
+      const updated = { ...prev, [key]: !prev[key] };
+      localStorage.setItem('homepage_widgets', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleSetAllWidgets = (value: boolean) => {
+    const updated: WidgetsConfig = {
+      showTodayPlan: value,
+      showDietAssistant: value,
+      showRecentRecipes: value,
+      showFavorites: value,
+      showAppliances: value,
+      showFunctionalAreas: value
+    };
+    setWidgets(updated);
+    localStorage.setItem('homepage_widgets', JSON.stringify(updated));
+  };
+
   const handleSavePreferences = async () => {
     setIsSavingPrefs(true);
     setPrefsSaved(false);
     try {
+      localStorage.setItem('homepage_widgets', JSON.stringify(widgets));
       await apiRequest('/auth/preferences', {
         method: 'PUT',
         body: JSON.stringify({
           theme,
           language: 'es',
           default_servings: servings,
+          widgets_config: JSON.stringify(widgets),
           notification_channels: JSON.stringify(notificationChannels)
         })
       });
@@ -283,7 +347,7 @@ export const ProfilePage: React.FC = () => {
           }`}
         >
           <Palette className="w-4 h-4" />
-          <span>Preferencias</span>
+          <span>Preferencias e Inicio</span>
         </button>
       </div>
 
@@ -558,6 +622,57 @@ export const ProfilePage: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Card: Google Sign-in & Connectors */}
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900 dark:text-white">Acceso con Google (OAuth 2.0)</h2>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">Inicio de sesión rápido para ti y los miembros del hogar</p>
+                </div>
+              </div>
+              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                {user?.google_id ? 'VINCULADO' : 'CORREO GOOGLE'}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
+                {user?.google_id ? (
+                  <span>Tu cuenta de usuario está vinculada directamente con tu perfil de Google (ID: <code className="font-mono text-[11px] bg-slate-100 dark:bg-zinc-800 px-1 py-0.5 rounded">{user.google_id}</code>). Puedes entrar siempre con el botón <strong>Continuar con Google</strong>.</span>
+                ) : (
+                  <span>Si tu correo (<strong>{user?.email}</strong>) coincide con tu cuenta de Google, puedes iniciar sesión pulsando directamente en <strong>Continuar con Google</strong> en la pantalla de bienvenida.</span>
+                )}
+              </p>
+
+              {user?.role === 'admin' && (
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-slate-900 dark:text-white block">Configuración de Conectores (Admin)</span>
+                    <span className="text-[11px] text-slate-500 dark:text-zinc-400">
+                      Gestiona Client ID, Secret, Telegram, Drive y Gemini en el panel de administración.
+                    </span>
+                  </div>
+                  <Link
+                    to="/admin?tab=connectors_ai"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-sm transition-colors whitespace-nowrap self-start sm:self-center"
+                  >
+                    <span>Abrir Conectores</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -660,16 +775,26 @@ export const ProfilePage: React.FC = () => {
                 </div>
 
                 {notificationChannels.telegram && (
-                  <div className="pt-2 border-t border-slate-200 dark:border-zinc-800">
-                    <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 block mb-1">
-                      Tu Chat ID de Telegram:
-                    </label>
+                  <div className="pt-2 border-t border-slate-200 dark:border-zinc-800 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        Tu Chat ID de Telegram:
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowTelegramGuide(true)}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-cyan-600 dark:text-cyan-400 hover:underline"
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span>¿Cómo obtener mi Chat ID?</span>
+                      </button>
+                    </div>
                     <input
                       type="text"
                       value={notificationChannels.telegram_chat_id}
                       onChange={(e) => setNotificationChannels(prev => ({ ...prev, telegram_chat_id: e.target.value }))}
                       placeholder="ej. 123456789"
-                      className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                      className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-sky-500 font-mono"
                     />
                   </div>
                 )}
@@ -701,6 +826,7 @@ export const ProfilePage: React.FC = () => {
       {/* Tab 4: Preferences */}
       {activeTab === 'preferences' && (
         <div className="space-y-6">
+          {/* Card 1: Theme & Servings */}
           <div className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-5 shadow-sm">
             <div className="border-b border-slate-100 dark:border-zinc-800 pb-3">
               <h2 className="text-base font-bold text-slate-900 dark:text-white">Preferencias de Interfaz</h2>
@@ -782,8 +908,179 @@ export const ProfilePage: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Card 2: Homepage Customization */}
+          <div id="homepage" className="p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-5 shadow-sm scroll-mt-20">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-zinc-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/20 shadow-xs">
+                  <SlidersHorizontal className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    Personalización de la Pantalla de Inicio
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                      Ajustes de Usuario
+                    </span>
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-zinc-400">
+                    Elige qué secciones y widgets deseas ver al entrar a la aplicación en tu pantalla principal
+                  </p>
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => handleSetAllWidgets(true)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 text-xs font-semibold transition-colors"
+                >
+                  Activar todas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSetAllWidgets(false)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 text-xs font-semibold transition-colors"
+                >
+                  Ocultar todas
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {[
+                {
+                  key: 'showDietAssistant' as keyof WidgetsConfig,
+                  title: 'Tips de mi Alimentación (Asistente Dietético IA)',
+                  badge: 'Nutrición IA',
+                  desc: 'Pautas nutricionales preventivas, objetivos calóricos personalizados y adaptación inteligente de platos para tu familia.',
+                  icon: Heart,
+                  colorBg: 'bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                },
+                {
+                  key: 'showTodayPlan' as keyof WidgetsConfig,
+                  title: '¿Qué tenemos planificado para hoy? (Menú del día)',
+                  badge: 'Planificador',
+                  desc: 'Visualización rápida de los platos asignados para hoy (desayuno, almuerzo, comida, merienda, cena) y botón de cocinado guiado.',
+                  icon: Calendar,
+                  colorBg: 'bg-blue-500/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400'
+                },
+                {
+                  key: 'showRecentRecipes' as keyof WidgetsConfig,
+                  title: 'Últimas recetas añadidas',
+                  badge: 'Recetario',
+                  desc: 'Carrusel con los platos más nuevos incorporados a la colección familiar.',
+                  icon: ChefHat,
+                  colorBg: 'bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400'
+                },
+                {
+                  key: 'showFavorites' as keyof WidgetsConfig,
+                  title: 'Mis Recetas Favoritas y Más Utilizadas',
+                  badge: 'Favoritas',
+                  desc: 'Acceso directo a las recetas marcadas con corazón por los miembros del hogar.',
+                  icon: Flame,
+                  colorBg: 'bg-rose-500/10 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400'
+                },
+                {
+                  key: 'showAppliances' as keyof WidgetsConfig,
+                  title: 'Acceso rápido por electrodomésticos',
+                  badge: 'Equipamiento',
+                  desc: 'Filtros rápidos con 1 clic para recetas adaptadas a Thermomix (TM7/TM6) y Freidora de aire (Airfryer).',
+                  icon: Zap,
+                  colorBg: 'bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400'
+                },
+                {
+                  key: 'showFunctionalAreas' as keyof WidgetsConfig,
+                  title: 'Accesos directos a las 6 áreas funcionales',
+                  badge: 'Navegación',
+                  desc: 'Mosaico de accesos rápidos a Recetario, Planificador semanal, Compra y despensa, Nutrición, Importador y Administración.',
+                  icon: SlidersHorizontal,
+                  colorBg: 'bg-purple-500/10 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400'
+                }
+              ].map(item => {
+                const isEnabled = Boolean(widgets[item.key]);
+                const IconComponent = item.icon;
+                return (
+                  <div
+                    key={item.key}
+                    className={`flex items-start justify-between gap-4 p-4 rounded-2xl border transition-all ${
+                      isEnabled
+                        ? 'bg-slate-50/80 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800/80 shadow-xs'
+                        : 'bg-slate-100/40 dark:bg-zinc-950/40 border-slate-200/50 dark:border-zinc-800/40 opacity-70'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className={`w-9 h-9 rounded-xl ${item.colorBg} flex items-center justify-center shrink-0 mt-0.5`}>
+                        <IconComponent className="w-5 h-5" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-bold text-slate-900 dark:text-white">
+                            {item.title}
+                          </span>
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300">
+                            {item.badge}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-zinc-400 leading-relaxed">
+                          {item.desc}
+                        </p>
+                      </div>
+                    </div>
+
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
+                      <input
+                        type="checkbox"
+                        checked={isEnabled}
+                        onChange={() => handleToggleWidget(item.key)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-zinc-800 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500" />
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <Link
+                  to="/"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+                >
+                  <span>Ver pantalla de inicio</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Link>
+                {prefsSaved && (
+                  <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 animate-in fade-in">
+                    <CheckCircle2 className="w-4 h-4" />
+                    ¡Guardado en tu perfil!
+                  </span>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSavePreferences}
+                disabled={isSavingPrefs}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition-all disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                <span>{isSavingPrefs ? 'Guardando...' : 'Guardar Preferencias de Inicio'}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
+
+      {/* Telegram Guide Modal */}
+      <ConnectorInfoModal
+        isOpen={showTelegramGuide}
+        onClose={() => setShowTelegramGuide(false)}
+        initialConnector="telegram"
+      />
     </div>
   );
 };

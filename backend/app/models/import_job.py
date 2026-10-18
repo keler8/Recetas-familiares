@@ -12,7 +12,8 @@ class ImportBatch(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     source_type = Column(String(50), nullable=False)  # drive, pdf, docx, image, instagram, manual, url
-    source_name = Column(String(255), nullable=True)  # Filename or URL
+    source_name = Column(Text, nullable=True)  # Filename or URL
+    source_url = Column(Text, nullable=True)  # Direct link to document in Drive or original URL
     status = Column(String(50), default="queued", nullable=False)  # queued, processing, pending_review, completed, error
     
     total_detected = Column(Integer, default=0, nullable=False)
@@ -38,8 +39,9 @@ class RecipeDraft(Base):
     raw_text = Column(Text, nullable=True)
     extracted_json = Column(Text, nullable=False)  # Complete JSON structure of extracted recipe
     
-    source_image_url = Column(String(500), nullable=True)
-    proposed_image_url = Column(String(500), nullable=True)
+    source_image_url = Column(Text, nullable=True)
+    proposed_image_url = Column(Text, nullable=True)
+    source_url = Column(Text, nullable=True)  # Direct link to Google Doc / Drive file / Instagram Reel
     
     # Review status
     status = Column(String(50), default="pending_review", nullable=False)  # pending_review, approved, discarded, duplicate

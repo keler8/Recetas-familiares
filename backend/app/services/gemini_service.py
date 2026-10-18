@@ -2,7 +2,10 @@ import os
 import json
 import logging
 import re
+import uuid
+import urllib.parse
 from typing import Dict, Any, List, Optional
+import httpx
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -71,23 +74,87 @@ class GeminiService:
     @staticmethod
     def _normalize_model(model_name: Optional[str]) -> str:
         if not model_name:
-            return "gemini-3.8-flash"
+            return "gemini-3.5-flash-lite"
         normalized = model_name.strip()
         deprecated = {
-            "gemini-2.5-flash": "gemini-3.8-flash",
-            "gemini-2.0-flash": "gemini-3.8-flash",
-            "gemini-1.5-flash": "gemini-3.8-flash",
+            "gemini-2.5-flash": "gemini-3.5-flash-lite",
+            "gemini-2.0-flash": "gemini-3.5-flash-lite",
+            "gemini-1.5-flash": "gemini-3.5-flash-lite",
             "gemini-1.5-pro": "gemini-3.1-pro-preview",
-            "gemini-2.5-pro": "gemini-3.1-pro-preview"
+            "gemini-2.5-pro": "gemini-3.1-pro-preview",
+            "gemini-3.8-flash": "gemini-3.5-flash-lite",
         }
         return deprecated.get(normalized, normalized)
+
+    def _generate_with_fallback(self, client, contents: Any, config: Any = None) -> Any:
+        candidate_models = [self.model_name] + [
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash"
+        ]
+        seen = set()
+        models_to_try = [m for m in candidate_models if not (m in seen or seen.add(m))]
+
+        last_error = None
+        for model in models_to_try:
+            try:
+                kwargs = {"model": model, "contents": contents}
+                if config is not None:
+                    kwargs["config"] = config
+                return client.models.generate_content(**kwargs)
+            except Exception as e:
+                err_str = str(e)
+                if any(code in err_str for code in ["429", "404", "503", "RESOURCE_EXHAUSTED", "NOT_FOUND", "UNAVAILABLE"]):
+                    logger.warning(f"Model {model} failed with temporary error ({err_str[:80]}), trying next candidate model...")
+                    last_error = e
+                    continue
+                else:
+                    raise e
+        if last_error:
+            raise last_error
+        raise RuntimeError("No candidate Gemini models succeeded")
 
     def __init__(self):
         self.api_key = settings.GEMINI_API_KEY
         self.model_name = self._normalize_model(settings.GEMINI_MODEL)
         self._client = None
 
+    def load_from_db(self, db=None) -> "GeminiService":
+        """Loads Gemini API key and model preference from SystemSetting database table."""
+        close_session = False
+        if db is None:
+            try:
+                from app.database import SessionLocal
+                db = SessionLocal()
+                close_session = True
+            except Exception as e:
+                logger.debug(f"Could not open DB session for Gemini settings: {e}")
+                return self
+        try:
+            from app.models.system import SystemSetting
+            setting = db.query(SystemSetting).filter(SystemSetting.key == "connector_gemini").first()
+            if setting and setting.value:
+                try:
+                    data = json.loads(setting.value) if isinstance(setting.value, str) else setting.value
+                    if data.get("api_key") and len(str(data["api_key"]).strip()) > 5:
+                        self.api_key = str(data["api_key"]).strip()
+                    if data.get("model"):
+                        self.model_name = self._normalize_model(data["model"])
+                    self._client = None
+                except Exception as ex:
+                    logger.warning(f"Error parsing connector_gemini settings: {ex}")
+        except Exception as e:
+            logger.warning(f"Error loading connector_gemini from database: {e}")
+        finally:
+            if close_session and db is not None:
+                db.close()
+        return self
+
     def is_configured(self) -> bool:
+        if not (self.api_key and len(self.api_key.strip()) > 5):
+            self.load_from_db()
         return bool(self.api_key and len(self.api_key.strip()) > 5)
 
     def update_credentials(self, api_key: Optional[str] = None, model: Optional[str] = None):
@@ -99,6 +166,9 @@ class GeminiService:
 
     def test_connection(self, api_key: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
         key_to_use = (api_key.strip() if api_key else None) or self.api_key
+        if not key_to_use:
+            self.load_from_db()
+            key_to_use = self.api_key
         model_to_use = self._normalize_model((model.strip() if model else None) or self.model_name)
         if not key_to_use or len(key_to_use) < 5:
             return {"success": False, "error": "No se ha proporcionado una clave API de Gemini válida."}
@@ -119,7 +189,9 @@ class GeminiService:
             return {"success": False, "error": str(e)}
 
     def _get_client(self):
-        if not self._client and self.is_configured():
+        if not self.is_configured():
+            return None
+        if not self._client:
             try:
                 from google import genai
                 self._client = genai.Client(api_key=self.api_key)
@@ -137,35 +209,386 @@ class GeminiService:
                 client = self._get_client()
                 if client:
                     prompt = (
-                        "Actúa como un chef y especialista culinario. Analiza el siguiente texto extraído de un "
-                        f"{source_hint}. Si contiene múltiples recetas, sepáralas individualmente en una lista JSON. "
-                        "Para cada receta, extrae los campos estructurados estrictos según el esquema JSON. "
-                        "IMPORTANTE: No inventes cantidades ni tiempos que no existan. Si algo no está claro, indícalo "
-                        "en 'uncertainty_notes'. Mantén los nombres de ingredientes normalizados en castellano.\n\n"
-                        f"Texto:\n{text[:15000]}"
+                        "Actúa como un chef profesional y redactor culinario de alta gastronomía. "
+                        f"Analiza el siguiente texto culinario extraído de: {source_hint}.\n"
+                        "Si el documento contiene varias recetas separadas, extrae cada una como un objeto dentro de una lista JSON.\n"
+                        "REGLAS OBLIGATORIAS:\n"
+                        "1. TÍTULO LIMPIO: Devuelve un título limpio y elegante en 'title'. Elimina numeraciones o viñetas iniciales (ej: '. Tarta...' -> 'Tarta...'). Si el título incluye notas de autoría como '(Ana Munel)' o 'Jordi Roca', mantén la receta con el nombre del plato y menciónalo con elegancia en 'description'.\n"
+                        "2. CLASIFICACIÓN EXACTA (dish_type): Clasifica estrictamente como uno de: 'Postre', 'Plato principal', 'Entrante / Aperitivo', 'Guarnición', 'Desayuno / Merienda' o 'Bebida / Coctel'. Cualquier tarta, bizcocho, coulant, dulce o postre DEBE tener dish_type = 'Postre'.\n"
+                        "3. TIEMPOS REALISTAS: Estima tiempos coherentes (prep_time_min, cook_time_min, total_time_min). No pongas tiempos por defecto.\n"
+                        "4. DIFICULTAD: 'facil', 'media' o 'dificil'.\n"
+                        "5. INGREDIENTES: Lista de objetos con 'name' (normalizado en español), 'amount' (numérico o null), 'unit' (ej: 'g', 'ml', 'ud', 'cucharada', 'pizca') y 'notes' (opcional).\n"
+                        "6. PASOS: Lista de pasos secuenciales y detallados ('step_number', 'instruction', 'timer_seconds' en segundos si el paso requiere tiempo, y 'tip' opcional).\n"
+                        "7. KEYWORD FOTO: 'food_keyword' con el término más preciso en inglés o español para buscar una foto culinaria perfecta del plato (ej: 'chocolate coulant lava cake', 'carrot cake cream cheese frosting', 'apple pie tart', 'seafood soup bisque', 'braised beef cheeks', etc.).\n"
+                        "8. CALORÍAS Y VALOR NUTRICIONAL: Estima con rigor culinario las calorías por ración en 'nutrition_calories' (número realista, ej: 420.0) y los macronutrientes por ración: 'nutrition_protein' (proteínas en g), 'nutrition_carbs' (carbohidratos en g) y 'nutrition_fat' (grasas en g) basándote en los ingredientes, cantidades y raciones ('base_servings'). No dejes las calorías a null ni a 0.\n\n"
+                        f"Texto de la receta:\n{text[:15000]}"
                     )
-                    response = client.models.generate_content(
-                        model=self.model_name,
+                    from google.genai import types
+                    config = types.GenerateContentConfig(response_mime_type="application/json")
+                    response = self._generate_with_fallback(
+                        client,
                         contents=prompt,
-                        config={
-                            "response_mime_type": "application/json",
-                        }
+                        config=config
                     )
                     content = response.text
                     parsed = json.loads(content)
+                    raw_recipes = []
                     if isinstance(parsed, list):
-                        return parsed
+                        raw_recipes = parsed
                     elif isinstance(parsed, dict) and "recipes" in parsed:
-                        return parsed["recipes"]
-                    elif isinstance(parsed, dict) and "title" in parsed:
-                        return [parsed]
+                        raw_recipes = parsed["recipes"]
+                    elif isinstance(parsed, dict) and ("title" in parsed or "ingredients" in parsed):
+                        raw_recipes = [parsed]
+                    
+                    if raw_recipes:
+                        return [self._format_extracted_recipe(r, source_hint) for r in raw_recipes]
             except Exception as e:
                 logger.warning(f"Gemini API extraction failed, using fallback heuristic parser: {e}")
 
         # Local intelligent heuristic parser fallback
-        return self._heuristic_recipe_parser(text)
+        return [self._format_extracted_recipe(r, source_hint) for r in self._heuristic_recipe_parser(text)]
+
+    def _format_extracted_recipe(self, r: Dict[str, Any], source_hint: str = "") -> Dict[str, Any]:
+        """Ensures a recipe extracted from any document or text is complete, consistent, and beautifully formatted."""
+        raw_title = r.get("title") or (os.path.splitext(source_hint)[0].replace("_", " ").title() if source_hint else "Receta sin título")
+        # Strip leading dots, numbers, dashes, bullet points: e.g. ". Tarta de zanahoria" -> "Tarta de zanahoria"
+        title = re.sub(r"^[\s0-9\.\-\*\•\–\—]+", "", str(raw_title)).strip()
+        if not title:
+            title = str(raw_title).strip() or "Receta sin título"
+
+        prep_time = r.get("prep_time_min") or 15
+        cook_time = r.get("cook_time_min") or 20
+        total_time = r.get("total_time_min") or (prep_time + cook_time)
+
+        # Smart classification of dish_type
+        raw_dish_type = (r.get("dish_type") or "").strip()
+        lower_title = title.lower()
+        if not raw_dish_type or raw_dish_type.lower() in ["comida", "cena", "plato principal"]:
+            if any(k in lower_title for k in ["tarta", "bizcocho", "coulant", "culan", "volcan", "volcán", "pastel", "brownie", "cheesecake", "dulce", "postre", "flan", "mousse", "galleta", "cookie", "magdalena", "muffin", "helado", "panna cotta", "crema catalana", "natilla"]):
+                dish_type = "Postre"
+            elif any(k in lower_title for k in ["sopa", "crema", "gazpacho", "salmorejo", "croqueta", "ensalada", "tapa", "aperitivo", "empanada"]):
+                dish_type = "Entrante / Aperitivo"
+            elif any(k in lower_title for k in ["tostada", "pancake", "tortita", "desayuno", "merienda", "smoothie"]):
+                dish_type = "Desayuno / Merienda"
+            else:
+                dish_type = raw_dish_type or "Plato principal"
+        else:
+            dish_type = raw_dish_type
+
+        cuisine = r.get("cuisine") or ("Repostería" if dish_type == "Postre" else "Mediterránea")
+        difficulty = r.get("difficulty") or "media"
+        if difficulty not in ["facil", "media", "dificil"]:
+            difficulty = "media"
+
+        base_servings = r.get("base_servings") or (8 if dish_type == "Postre" else 4)
+        categories = r.get("categories") or ["Comidas", "Platos principales"]
+        if isinstance(categories, str):
+            categories = [categories]
+        tags = r.get("tags") or ["Casero"]
+        if isinstance(tags, str):
+            tags = [tags]
+        allergens = r.get("allergens") or []
+        if isinstance(allergens, str):
+            allergens = [allergens]
+
+        # Clean ingredients
+        raw_ings = r.get("ingredients") or []
+        cleaned_ings = []
+        for idx, ing in enumerate(raw_ings):
+            if isinstance(ing, str):
+                cleaned_ings.append({"name": ing.strip(), "amount": 1.0, "unit": "ud", "notes": None, "order_index": idx})
+            elif isinstance(ing, dict):
+                cleaned_ings.append({
+                    "name": ing.get("name") or "Ingrediente",
+                    "amount": ing.get("amount") if ing.get("amount") is not None else 1.0,
+                    "unit": ing.get("unit") or "ud",
+                    "notes": ing.get("notes"),
+                    "order_index": idx
+                })
+        if not cleaned_ings:
+            cleaned_ings.append({"name": "Ingredientes según preparación", "amount": 1.0, "unit": "ud", "notes": None, "order_index": 0})
+
+        # Clean steps
+        raw_steps = r.get("steps") or []
+        cleaned_steps = []
+        for idx, step in enumerate(raw_steps):
+            if isinstance(step, str):
+                cleaned_steps.append({"step_number": idx + 1, "instruction": step.strip(), "timer_seconds": None, "tip": None})
+            elif isinstance(step, dict):
+                cleaned_steps.append({
+                    "step_number": step.get("step_number") or (idx + 1),
+                    "instruction": step.get("instruction") or f"Paso {idx + 1}",
+                    "timer_seconds": step.get("timer_seconds"),
+                    "tip": step.get("tip")
+                })
+        if not cleaned_steps:
+            cleaned_steps.append({"step_number": 1, "instruction": "Preparar y cocinar los ingredientes al gusto.", "timer_seconds": None, "tip": None})
+
+        # Nutrition handling
+        nutrition_cal = r.get("nutrition_calories")
+        nutrition_prot = r.get("nutrition_protein")
+        nutrition_carbs = r.get("nutrition_carbs")
+        nutrition_fat = r.get("nutrition_fat")
+
+        if nutrition_cal is None or float(nutrition_cal or 0) <= 0:
+            est_nut = self.heuristic_estimate_nutrition(title, cleaned_ings, int(base_servings), dish_type)
+            nutrition_cal = est_nut.get("calories")
+            nutrition_prot = est_nut.get("protein")
+            nutrition_carbs = est_nut.get("carbs")
+            nutrition_fat = est_nut.get("fat")
+        else:
+            try:
+                nutrition_cal = round(float(nutrition_cal), 1)
+                nutrition_prot = round(float(nutrition_prot), 1) if nutrition_prot is not None else None
+                nutrition_carbs = round(float(nutrition_carbs), 1) if nutrition_carbs is not None else None
+                nutrition_fat = round(float(nutrition_fat), 1) if nutrition_fat is not None else None
+            except (ValueError, TypeError):
+                est_nut = self.heuristic_estimate_nutrition(title, cleaned_ings, int(base_servings), dish_type)
+                nutrition_cal = est_nut.get("calories")
+                nutrition_prot = est_nut.get("protein")
+                nutrition_carbs = est_nut.get("carbs")
+                nutrition_fat = est_nut.get("fat")
+
+        return {
+            "title": title,
+            "description": r.get("description") or f"Exquisita receta de {title}.",
+            "dish_type": dish_type,
+            "cuisine": cuisine,
+            "prep_time_min": int(prep_time),
+            "cook_time_min": int(cook_time),
+            "total_time_min": int(total_time),
+            "difficulty": difficulty,
+            "base_servings": int(base_servings),
+            "categories": categories,
+            "tags": tags,
+            "allergens": allergens,
+            "ingredients": cleaned_ings,
+            "steps": cleaned_steps,
+            "nutrition_calories": float(nutrition_cal) if nutrition_cal is not None else None,
+            "nutrition_protein": float(nutrition_prot) if nutrition_prot is not None else None,
+            "nutrition_carbs": float(nutrition_carbs) if nutrition_carbs is not None else None,
+            "nutrition_fat": float(nutrition_fat) if nutrition_fat is not None else None,
+            "uncertainty_notes": r.get("uncertainty_notes") or []
+        }
+
+    def estimate_recipe_nutrition(
+        self,
+        title: str,
+        ingredients: List[Any],
+        base_servings: int = 4,
+        dish_type: Optional[str] = None
+    ) -> Dict[str, float]:
+        """
+        Estimates nutritional values (calories, protein, carbs, fat per serving)
+        using Gemini API, or falls back to intelligent nutritional heuristics.
+        """
+        servings = max(1, int(base_servings or 4))
+        if self.is_configured():
+            try:
+                client = self._get_client()
+                if client:
+                    ing_lines = []
+                    for ing in (ingredients or []):
+                        if isinstance(ing, str):
+                            ing_lines.append(f"- {ing}")
+                        elif isinstance(ing, dict):
+                            amt = ing.get("amount")
+                            unit = ing.get("unit") or ""
+                            name = ing.get("name") or ""
+                            notes = ing.get("notes")
+                            amt_str = f"{amt} {unit}".strip() if amt else ""
+                            notes_str = f" ({notes})" if notes else ""
+                            ing_lines.append(f"- {amt_str} {name}{notes_str}".strip())
+
+                    prompt = (
+                        "Actúa como un dietista y nutricionista culinario profesional. "
+                        "Calcula los valores nutricionales estimados POR RACIÓN para la siguiente receta culinaria:\n"
+                        f"Título: {title}\n"
+                        f"Tipo de plato: {dish_type or 'Plato'}\n"
+                        f"Raciones base (servings): {servings}\n"
+                        "Ingredientes:\n"
+                        + ("\n".join(ing_lines) if ing_lines else "- Ingredientes habituales del plato") + "\n\n"
+                        "Calcula la suma calórica realista de los ingredientes y divídela entre las raciones indicadas.\n"
+                        "Devuelve ÚNICAMENTE un objeto JSON estructurado:\n"
+                        "{\n"
+                        '  "calories": 420.0,\n'
+                        '  "protein": 28.5,\n'
+                        '  "carbs": 35.0,\n'
+                        '  "fat": 16.0\n'
+                        "}"
+                    )
+                    from google.genai import types
+                    config = types.GenerateContentConfig(response_mime_type="application/json")
+                    response = self._generate_with_fallback(
+                        client,
+                        contents=prompt,
+                        config=config
+                    )
+                    parsed = json.loads(response.text)
+                    if isinstance(parsed, dict) and "calories" in parsed:
+                        cal = float(parsed.get("calories") or 0)
+                        prot = float(parsed.get("protein") or 0)
+                        carbs = float(parsed.get("carbs") or 0)
+                        fat = float(parsed.get("fat") or 0)
+                        if cal > 0:
+                            return {
+                                "calories": round(cal, 1),
+                                "protein": round(prot, 1),
+                                "carbs": round(carbs, 1),
+                                "fat": round(fat, 1)
+                            }
+            except Exception as e:
+                logger.warning(f"Gemini API nutrition estimation failed: {e}")
+
+        return self.heuristic_estimate_nutrition(title, ingredients, servings, dish_type)
+
+    def heuristic_estimate_nutrition(
+        self,
+        title: str,
+        ingredients: List[Any],
+        base_servings: int = 4,
+        dish_type: Optional[str] = None
+    ) -> Dict[str, float]:
+        """
+        Intelligent nutritional heuristic engine calculating calories and macros
+        per serving based on ingredient density tables and culinary classification.
+        """
+        servings = max(1, int(base_servings or 4))
+        lower_title = (title or "").lower()
+        dish = (dish_type or "").lower()
+
+        total_kcal = 0.0
+        total_prot = 0.0
+        total_carbs = 0.0
+        total_fat = 0.0
+        parsed_any = False
+
+        INGREDIENT_DENSITIES = [
+            (["aceite", "oliva", "girasol"], 884, 0, 0, 100),
+            (["mantequilla", "manteca"], 717, 1, 0, 81),
+            (["nata", "crema de leche", "crema para cocinar"], 340, 2.5, 3, 36),
+            (["mayonesa"], 680, 1, 1, 75),
+            (["azúcar", "azucar", "azúcar moreno", "glace"], 387, 0, 100, 0),
+            (["miel", "sirope", "caramelo"], 304, 0.3, 82, 0),
+            (["chocolate negro", "chocolate fondant", "cacao puro", "cacao"], 540, 8, 46, 31),
+            (["chocolate blanco", "chocolate con leche"], 535, 8, 59, 30),
+            (["turrón", "turron"], 550, 10, 50, 35),
+            (["harina", "maizena", "almidon"], 364, 10, 76, 1),
+            (["arroz"], 360, 7, 79, 1),
+            (["pasta", "espagueti", "macarron", "tallarin", "fideo", "lasaña"], 370, 13, 74, 1.5),
+            (["pan", "galleta", "bizcocho", "hojaldre", "masa"], 380, 8, 65, 12),
+            (["avena"], 389, 17, 66, 7),
+            (["pollo", "pechuga", "pavo"], 165, 31, 0, 3.6),
+            (["ternera", "buey", "carne picada"], 250, 26, 0, 15),
+            (["cerdo", "carrillera", "lomo", "costilla", "panceta", "bacon"], 280, 20, 0, 22),
+            (["jamón", "jamon"], 240, 30, 0, 13),
+            (["salmón", "salmon"], 208, 20, 0, 13),
+            (["atún", "atun", "bonito"], 140, 24, 0, 4),
+            (["merluza", "bacalao", "raya", "pescada", "lenguado"], 90, 18, 0, 1),
+            (["gamba", "gambon", "langostino", "camarón", "vieira", "mejillón", "almeja"], 95, 20, 1, 1),
+            (["huevo"], 155, 13, 1, 11),
+            (["leche"], 62, 3.3, 4.8, 3.3),
+            (["queso crema", "mascarpone", "philadelphia"], 350, 6, 4, 35),
+            (["queso", "parmesano", "mozzarella", "gouda", "manchego", "cheddar", "cabrales"], 380, 25, 2, 30),
+            (["yogur"], 60, 3.5, 4.7, 3.3),
+            (["cuajada"], 90, 5, 5, 5),
+            (["nuez", "nueces", "almendra", "avellana", "piñon", "cacahuete", "pistacho", "castaña"], 600, 15, 14, 55),
+            (["garbanzo", "lenteja", "alubia", "judia blanca"], 160, 9, 27, 2.5),
+            (["patata", "papa", "boniato", "batata"], 86, 2, 20, 0.1),
+            (["calabaza", "zanahoria", "remolacha"], 35, 1, 8, 0.2),
+            (["cebolla", "puerro", "ajo", "chalota"], 40, 1.4, 9, 0.1),
+            (["tomate", "pimiento", "calabacín", "berenjena", "champiñon", "seta", "espárrago"], 25, 1.5, 4, 0.2),
+            (["manzana", "pera", "plátano", "fresa", "granada", "naranja", "limón"], 55, 0.5, 14, 0.2)
+        ]
+
+        for ing in (ingredients or []):
+            raw_name = ""
+            amt = None
+            unit = "ud"
+            if isinstance(ing, str):
+                raw_name = ing
+                match = re.search(r"(\d+[\.,]?\d*)\s*(g|kg|ml|l|cucharadas?|pizcas?|ud|uds)?\s*(.*)", ing, re.IGNORECASE)
+                if match:
+                    amt = float(match.group(1).replace(",", "."))
+                    unit = match.group(2) or "ud"
+                    raw_name = match.group(3)
+            elif isinstance(ing, dict):
+                raw_name = ing.get("name") or ""
+                amt = ing.get("amount")
+                unit = (ing.get("unit") or "ud").lower()
+
+            name_lower = raw_name.lower()
+            grams = 100.0
+            if amt is not None:
+                try:
+                    f_amt = float(amt)
+                    if unit in ["kg", "l", "litro", "litros"]:
+                        grams = f_amt * 1000.0
+                    elif unit in ["g", "gr", "gramos", "ml"]:
+                        grams = f_amt
+                    elif unit in ["cucharada", "cucharadas", "tbsp"]:
+                        grams = f_amt * 15.0
+                    elif unit in ["cucharadita", "cucharaditas", "tsp"]:
+                        grams = f_amt * 5.0
+                    elif unit in ["taza", "tazas", "cup"]:
+                        grams = f_amt * 200.0
+                    elif unit in ["pizca", "pizcas"]:
+                        grams = f_amt * 2.0
+                    elif "huevo" in name_lower:
+                        grams = f_amt * 55.0
+                    else:
+                        if any(w in name_lower for w in ["cebolla", "manzana", "pera", "patata"]):
+                            grams = f_amt * 150.0
+                        elif any(w in name_lower for w in ["diente", "ajo"]):
+                            grams = f_amt * 5.0
+                        else:
+                            grams = f_amt * 80.0
+                except (ValueError, TypeError):
+                    grams = 100.0
+
+            matched = False
+            for keywords, k_cal, k_prot, k_carbs, k_fat in INGREDIENT_DENSITIES:
+                if any(kw in name_lower for kw in keywords):
+                    factor = grams / 100.0
+                    total_kcal += k_cal * factor
+                    total_prot += k_prot * factor
+                    total_carbs += k_carbs * factor
+                    total_fat += k_fat * factor
+                    matched = True
+                    parsed_any = True
+                    break
+
+            if not matched and len(name_lower) > 2:
+                total_kcal += 30.0 * (grams / 100.0)
+
+        per_serving_cal = total_kcal / servings if (parsed_any and total_kcal > 150) else None
+        if not per_serving_cal or per_serving_cal < 80:
+            if "postre" in dish or any(k in lower_title for k in ["tarta", "bizcocho", "coulant", "chocolate", "pastel", "brownie", "cheesecake", "flan", "mousse"]):
+                return {"calories": 420.0, "protein": 6.5, "carbs": 54.0, "fat": 19.5}
+            elif any(k in lower_title for k in ["sopa", "crema", "gazpacho", "salmorejo", "caldo"]):
+                return {"calories": 185.0, "protein": 7.0, "carbs": 16.0, "fat": 9.5}
+            elif any(k in lower_title for k in ["croqueta", "canapé", "canape", "tapa", "aperitivo"]):
+                return {"calories": 260.0, "protein": 9.0, "carbs": 24.0, "fat": 14.0}
+            elif any(k in lower_title for k in ["ensalada"]):
+                return {"calories": 280.0, "protein": 8.0, "carbs": 12.0, "fat": 20.0}
+            elif any(k in lower_title for k in ["arroz", "pasta", "espagueti", "macarron", "lasaña"]):
+                return {"calories": 520.0, "protein": 22.0, "carbs": 74.0, "fat": 14.0}
+            elif any(k in lower_title for k in ["pollo", "ternera", "carne", "carrillera", "solomillo"]):
+                return {"calories": 480.0, "protein": 38.0, "carbs": 18.0, "fat": 24.0}
+            elif any(k in lower_title for k in ["pescado", "salmón", "salmon", "merluza", "raya", "marisco", "vieira"]):
+                return {"calories": 390.0, "protein": 34.0, "carbs": 12.0, "fat": 18.0}
+            else:
+                return {"calories": 440.0, "protein": 26.0, "carbs": 38.0, "fat": 18.0}
+
+        return {
+            "calories": round(total_kcal / servings, 1),
+            "protein": round(total_prot / servings, 1),
+            "carbs": round(total_carbs / servings, 1),
+            "fat": round(total_fat / servings, 1)
+        }
 
     def generate_appliance_variant(self, recipe_dict: Dict[str, Any], target_appliance: str) -> Dict[str, Any]:
+
         """
         Generates Thermomix TM7 or Airfryer 6L variant adaptation.
         """
@@ -235,16 +658,26 @@ class GeminiService:
                         "Para desayunos, almuerzos/media mañana y meriendas puedes sugerir productos sencillos y saludables "
                         "(ej. 'Tostada integral con tomate y AOVE', '1 Manzana con puñado de nueces', 'Yogur natural con semillas', 'Kéfir con frutos rojos').\n"
                         f"Preferencias y hábitos del hogar: {json.dumps(preferences, ensure_ascii=False)}.\n"
-                        f"Recetas disponibles: {json.dumps([{'id': r['id'], 'title': r['title'], 'dish_type': r.get('dish_type'), 'calories': r.get('nutrition_calories')} for r in approved_recipes], ensure_ascii=False)}.\n"
+                        f"Recetas disponibles: {json.dumps([{'id': r['id'], 'title': r['title'], 'dish_type': r.get('dish_type'), 'calories': r.get('nutrition_calories') or r.get('calories')} for r in approved_recipes], ensure_ascii=False)}.\n"
                         "Devuelve una lista JSON con objetos: "
                         "[{'day': str, 'meal_type': 'desayuno'|'almuerzo'|'comida'|'merienda'|'cena'|'snacks', 'recipe_id': int|null, 'title': str, 'calories': float}]."
                     )
-                    response = client.models.generate_content(
-                        model=self.model_name,
+                    response = self._generate_with_fallback(
+                        client,
                         contents=prompt,
                         config={"response_mime_type": "application/json"}
                     )
-                    return json.loads(response.text)
+                    raw_text = response.text.strip()
+                    if raw_text.startswith("```"):
+                        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+                        raw_text = re.sub(r"\s*```$", "", raw_text)
+                    data = json.loads(raw_text)
+                    if isinstance(data, list) and len(data) > 0:
+                        return data
+                    elif isinstance(data, dict):
+                        for k in ["plan", "menu", "meals", "items", "suggestions"]:
+                            if k in data and isinstance(data[k], list) and len(data[k]) > 0:
+                                return data[k]
             except Exception as e:
                 logger.warning(f"Gemini meal plan generation failed: {e}")
 
@@ -646,8 +1079,8 @@ class GeminiService:
 
     def extract_nutrition_plan_from_image(self, file_bytes: bytes, mime_type: str = "image/jpeg") -> Dict[str, Any]:
         """
-        Parses a photo or scanned document of a weekly nutrition plan, diet menu or doctor sheet.
-        Uses Gemini multimodal vision (gemini-3.8-flash) to extract structured days and meals.
+        Parses a photo or scanned document of a weekly nutrition plan, dietitian report, diet menu or doctor sheet.
+        Uses Gemini multimodal vision (gemini-3.8-flash) to extract structured patient profile, habits, and weekly days/meals.
         Falls back to intelligent local heuristic if Gemini is not configured or fails.
         """
         client = self._get_client()
@@ -658,29 +1091,46 @@ class GeminiService:
                 from google.genai import types
                 part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
                 prompt = (
-                    "Eres un asistente nutricionista y culinario de alta precisión.\n"
-                    "Analiza esta imagen o documento que contiene una pauta nutricional, dieta médica o planificación semanal de comidas "
-                    "y extrae toda la planificación estructurada en formato JSON estricto.\n\n"
+                    "Eres un asistente nutricionista y culinario clínico de alta precisión.\n"
+                    "Analiza este informe de una dietista, pauta médica o documento de planificación nutricional semanal "
+                    "y extrae tanto el perfil y hábitos de la persona como toda la planificación semanal en formato JSON estricto.\n\n"
                     "Reglas de extracción:\n"
-                    "1. Identifica los días de la semana (lunes, martes, miercoles, jueves, viernes, sabado, domingo). Si la imagen solo tiene días numerados (Día 1 a 7), mapea Día 1 a lunes, etc.\n"
-                    "2. Identifica cada comida o toma del día y clasifícala estrictamente en uno de estos valores para 'meal_type':\n"
-                    "   - 'desayuno'\n"
-                    "   - 'almuerzo' (media mañana)\n"
-                    "   - 'comida' (almuerzo principal del mediodía)\n"
-                    "   - 'merienda'\n"
-                    "   - 'cena'\n"
-                    "   - 'snacks' (picoteo o suplementación)\n"
-                    "3. Para cada comida o plato extrae:\n"
-                    "   - 'title': Nombre claro y apetitoso del plato o alimento (ej. 'Lentejas estofadas con verduras', 'Yogur natural con nueces', 'Pollo a la plancha con judías verdes').\n"
-                    "   - 'calories': Número entero estimado de calorías para 1 ración (ej. 450, o 180 para merienda/snack). Si la foto indica calorías o gramos, úsalas con exactitud.\n"
-                    "   - 'is_recipe': true si es un plato cocinado/receta con preparación (ej. guiso, ensalada mixta, salteado, tortilla, pescado al horno); false si es un alimento directo o producto sin receta (ej. '1 manzana', 'café solo', '2 nueces').\n"
-                    "   - 'description': Breve descripción culinaria de 1 o 2 frases.\n"
-                    "   - 'ingredients': Lista de ingredientes deducibles o visibles con {'name': str, 'amount': float or null, 'unit': str or null}.\n"
-                    "   - 'steps': Pasos sencillos de preparación si es una receta elaborada [{'step_number': 1, 'instruction': '...'}].\n\n"
+                    "1. Perfil del paciente y hábitos:\n"
+                    "   - 'patient_name': Nombre de la persona o comensal si aparece en el informe (o null si no figura).\n"
+                    "   - 'target_calories': Calorías diarias totales recomendadas para la persona (número entero, ej. 1500, 1800, 2000, o null si no se especifica).\n"
+                    "   - 'dietary_goal': Objetivo del plan ('deficit' para pérdida de grasa, 'mantenimiento', 'superavit' o aumento muscular, 'saludable' o 'antiinflamatorio').\n"
+                    "   - 'habits': Resumen de hábitos, pautas y estilo de vida prescritos por la dietista (ej. 'Beber 2L de agua diarios, cocinar a la plancha/vapor, 5 tomas al día, ejercicio moderado 30min').\n"
+                    "   - 'dietary_guidelines': Lista de pautas o consejos clave indicados por la dietista en formato lista de strings (ej. ['Beber 2 litros de agua al día', 'Priorizar AOVE en crudo', 'Evitar bebidas azucaradas']).\n"
+                    "   - 'preferred_foods': Alimentos recomendados o destacados (texto o null).\n"
+                    "   - 'excluded_foods': Alimentos prohibidos, desaconsejados o alérgenos a evitar (texto o null).\n"
+                    "   - 'notes': Cualquier otra indicación relevante de la consulta o informe.\n\n"
+                    "2. Planificación semanal de comidas:\n"
+                    "   - Identifica los días de la semana (lunes, martes, miercoles, jueves, viernes, sabado, domingo). Si la imagen solo tiene días numerados (Día 1 a 7), mapea Día 1 a lunes, etc.\n"
+                    "   - Clasifica cada toma estrictamente en uno de estos valores para 'meal_type':\n"
+                    "     * 'desayuno'\n"
+                    "     * 'almuerzo' (media mañana)\n"
+                    "     * 'comida' (almuerzo principal)\n"
+                    "     * 'merienda'\n"
+                    "     * 'cena'\n"
+                    "     * 'snacks' (picoteo o suplementación)\n"
+                    "   - Para cada plato o comida extrae:\n"
+                    "     * 'title': Nombre claro y apetitoso del plato o alimento (ej. 'Lentejas estofadas con verduras', 'Yogur natural con nueces', 'Pollo a la plancha con judías verdes').\n"
+                    "     * 'calories': Calorías estimadas para 1 ración individual del paciente (ej. 450, o 180 para merienda/snack).\n"
+                    "     * 'is_recipe': true si es un plato cocinado/receta con preparación (ej. guiso, ensalada mixta, salteado, tortilla, pescado al horno); false si es un alimento directo o producto sin receta (ej. '1 manzana', 'café solo', '2 nueces').\n"
+                    "     * 'description': Breve descripción culinaria de 1 o 2 frases.\n"
+                    "     * 'ingredients': Lista de ingredientes deducibles o visibles para 1 ración individual con {'name': str, 'amount': float or null, 'unit': str or null}.\n"
+                    "     * 'steps': Pasos sencillos de preparación si es una receta elaborada [{'step_number': 1, 'instruction': '...'}].\n\n"
                     "Responde ÚNICAMENTE con el objeto JSON sin comillas invertidas ni bloques ```json. La estructura requerida es:\n"
                     "{\n"
-                    "  \"plan_title\": \"Plan Nutricional Extraído\",\n"
-                    "  \"notes\": \"Indicaciones generales, hidratación o consejos que aparezcan en el documento\",\n"
+                    "  \"plan_title\": \"Plan Nutricional Dietista\",\n"
+                    "  \"patient_name\": \"Nombre del paciente o null\",\n"
+                    "  \"target_calories\": 1600,\n"
+                    "  \"dietary_goal\": \"deficit\",\n"
+                    "  \"habits\": \"Pautas generales prescritas por la dietista...\",\n"
+                    "  \"dietary_guidelines\": [\"Pauta 1\", \"Pauta 2\"],\n"
+                    "  \"preferred_foods\": \"Verduras de temporada, legumbres, pescado azul\",\n"
+                    "  \"excluded_foods\": \"Fritos, ultraprocesados, harinas refinadas\",\n"
+                    "  \"notes\": \"Indicaciones de la consulta\",\n"
                     "  \"days\": [\n"
                     "    {\n"
                     "      \"day_name\": \"lunes\",\n"
@@ -749,9 +1199,349 @@ class GeminiService:
 
         return {
             "plan_title": "Plan Nutricional Mediterráneo",
+            "patient_name": None,
+            "target_calories": 1800,
+            "dietary_goal": "saludable",
+            "habits": "Beber al menos 2 litros de agua diarios, cocinar a la plancha o al vapor, evitar ultraprocesados y mantener actividad física regular.",
+            "dietary_guidelines": [
+                "Mantener una adecuada hidratación (2 litros diarios de agua o infusiones)",
+                "Priorizar cocciones ligeras: plancha, vapor, horno y papillote",
+                "Evitar ultraprocesados, salsas comerciales y azúcares añadidos",
+                "Cenar al menos 2 horas antes de acostarse para favorecer la digestión"
+            ],
+            "preferred_foods": "Verduras variadas de temporada, legumbres, pescado blanco y azul, huevos y AOVE",
+            "excluded_foods": "Fritos, refrescos con azúcar, bollería y snacks ultraprocesados",
             "notes": "Plan generado con pautas saludables equilibradas en macronutrientes.",
             "days": days
         }
 
+    def generate_or_find_recipe_image(
+        self,
+        title: str,
+        dish_type: Optional[str] = None,
+        cuisine: Optional[str] = None
+    ) -> str:
+        """
+        Returns an appetizing, high-resolution curated food photograph matched to the specific dish or category.
+        """
+        return self._get_curated_food_image(title, dish_type, cuisine)
+
+    def search_food_images_online(self, query: str, count: int = 10) -> List[str]:
+        """
+        Performs a real-time web search for authentic culinary photographs matching the exact dish title.
+        Returns direct, high-resolution food image URLs.
+        """
+        if not query or len(query.strip()) < 2:
+            return []
+
+        # Strip prefixes and parenthetical notes
+        clean = re.sub(r'^(receta\s+(de\s+)?|como\s+hacer\s+|como\s+montar\s+el\s+)', '', query, flags=re.IGNORECASE)
+        clean = re.sub(r'\(.*?\)', '', clean).strip()
+
+        search_terms = [
+            f"{clean} receta plato",
+            f"{clean} comida"
+        ]
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
+        }
+
+        found_urls = []
+        seen = set()
+
+        for st in search_terms:
+            if len(found_urls) >= count:
+                break
+            try:
+                url = f"https://www.bing.com/images/search?q={urllib.parse.quote(st)}&form=HDRSC2&first=1"
+                with httpx.Client(timeout=5.0, follow_redirects=True) as client:
+                    resp = client.get(url, headers=headers)
+                    if resp.status_code == 200:
+                        # Extract pairs of (original URL, Bing CDN ID OIP)
+                        pattern = r'murl&quot;:&quot;(https?://[^&]+)&quot;.*?id=(OIP\.[a-zA-Z0-9_-]+)'
+                        pairs = re.findall(pattern, resp.text)
+                        for murl, oip in pairs:
+                            murl_clean = murl.replace('&amp;', '&')
+                            murl_lower = murl_clean.lower()
+                            if any(bad in murl_lower for bad in ['.svg', '.gif', 'logo', 'icon', 'avatar', 'placeholder', 'blank', 'pixel', 'banner']):
+                                continue
+                            # Use high-resolution Bing CDN URL (800x600) which is fast, HTTPS, and bypasses 403 hotlink protections
+                            cdn_url = f"https://tse2.mm.bing.net/th?id={oip}&w=800&h=600&c=7&rs=1&p=0"
+                            if cdn_url not in seen:
+                                seen.add(cdn_url)
+                                found_urls.append(cdn_url)
+                                if len(found_urls) >= count:
+                                    break
+
+                        # Fallback: if pairs didn't yield enough, look for OIP IDs directly
+                        if len(found_urls) < count:
+                            oips = re.findall(r'id=(OIP\.[a-zA-Z0-9_-]+)', resp.text)
+                            for oip in oips:
+                                cdn_url = f"https://tse2.mm.bing.net/th?id={oip}&w=800&h=600&c=7&rs=1&p=0"
+                                if cdn_url not in seen:
+                                    seen.add(cdn_url)
+                                    found_urls.append(cdn_url)
+                                    if len(found_urls) >= count:
+                                        break
+            except Exception as e:
+                logger.debug(f"Online image search error for '{st}': {e}")
+
+        return found_urls
+
+    def get_food_image_candidates(
+        self,
+        title: str,
+        dish_type: Optional[str] = None,
+        cuisine: Optional[str] = None,
+        count: int = 12
+    ) -> List[str]:
+        """
+        Returns a prioritized list of high-quality photo URLs matching the recipe title,
+        combining real-time web search with curated dish galleries.
+        """
+        candidates: List[str] = []
+        seen = set()
+
+        # 1. Search online for the exact recipe title
+        try:
+            online_results = self.search_food_images_online(title, count=count)
+            for url in online_results:
+                if url not in seen:
+                    seen.add(url)
+                    candidates.append(url)
+        except Exception as e:
+            logger.debug(f"Error in online candidate search: {e}")
+
+        combined = f"{title} {dish_type or ''} {cuisine or ''}".lower()
+
+        # 2. Curated dish-specific galleries
+        dish_specific = [
+            (["coulant", "culan", "volcan", "volcán", "lava cake", "fondant chocolate", "fondant de chocolate"], [
+                "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1624353365286-3f8d62daad51?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["zanahoria", "carrot cake"], [
+                "https://images.unsplash.com/photo-1621303837174-89787a7d4729?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1606890737304-57a1ca8a5b62?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1588195538326-c5b1e9f80a1b?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["manzana", "apple pie", "apple tart"], [
+                "https://images.unsplash.com/photo-1568571780765-9276ac8b75a2?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1519915028121-7d3463d20b13?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1535920527002-b35e96722eb9?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["queso", "cheesecake"], [
+                "https://images.unsplash.com/photo-1533134242443-d4fd215305ad?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1524351199678-941a58a3df50?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1565958011703-44f9829ba187?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["gambon", "gambón", "gamba", "langostino", "marisco"], [
+                "https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1565680018434-b513d5e5fd47?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1534939561126-855b8675edd7?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["carrillera", "carrillada", "estofado", "guiso de carne"], [
+                "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1558030006-450675393462?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["brownie"], [
+                "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1589218436045-ee320057f443?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["bizcocho", "plum cake"], [
+                "https://images.unsplash.com/photo-1586985289688-ca3cf47d3e6e?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1558961363-fa8fdf82db35?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["paella", "arroz"], [
+                "https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1515443961218-a51367888e4b?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1512058564366-18510be2db19?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["croqueta"], [
+                "https://images.unsplash.com/photo-1562967914-608f82629710?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1541544741938-0af808871cc0?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["flan", "natilla", "crema catalana"], [
+                "https://images.unsplash.com/photo-1551024601-bec78aea704b?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1587314168485-3236d6710814?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["salmon", "salmón", "merluza", "bacalao", "pescado"], [
+                "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1534939561126-855b8675edd7?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["pollo", "pechuga", "alitas", "pavo"], [
+                "https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1626082927389-6cd097cdc6ec?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["carne", "ternera", "solomillo", "hamburguesa"], [
+                "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1558030006-450675393462?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["pasta", "espagueti", "macarron", "lasaña"], [
+                "https://images.unsplash.com/photo-1621996346565-e3d5d6281724?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1551183053-bf91a1d81141?auto=format&fit=crop&w=800&q=80",
+            ]),
+            (["pizza"], [
+                "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?auto=format&fit=crop&w=800&q=80",
+            ]),
+        ]
+
+        for keywords, urls in dish_specific:
+            if any(k in combined for k in keywords):
+                for u in urls:
+                    if u not in seen:
+                        seen.add(u)
+                        candidates.append(u)
+
+        # 3. Category fallback galleries
+        category_galleries = {
+            "dessert": [
+                "https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1565958011703-44f9829ba187?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1586985289688-ca3cf47d3e6e?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=800&q=80"
+            ],
+            "rice": [
+                "https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1512058564366-18510be2db19?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?auto=format&fit=crop&w=800&q=80"
+            ],
+            "pasta": [
+                "https://images.unsplash.com/photo-1621996346565-e3d5d6281724?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1551183053-bf91a1d81141?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=800&q=80"
+            ],
+            "chicken": [
+                "https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1626082927389-6cd097cdc6ec?auto=format&fit=crop&w=800&q=80"
+            ],
+            "meat": [
+                "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1558030006-450675393462?auto=format&fit=crop&w=800&q=80"
+            ],
+            "fish": [
+                "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1534939561126-855b8675edd7?auto=format&fit=crop&w=800&q=80"
+            ],
+            "soup": [
+                "https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1543339308-43e59d6b73a6?auto=format&fit=crop&w=800&q=80"
+            ],
+            "default": [
+                "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80",
+                "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80"
+            ]
+        }
+
+        target_cat = "default"
+        if (dish_type and dish_type.lower() == "postre") or any(w in combined for w in ["tarta", "bizcocho", "pastel", "dulce", "postre", "flan", "mousse", "galleta", "brownie", "cheesecake", "torta", "coulant", "culan", "volcan", "volcán", "chocolate"]):
+            target_cat = "dessert"
+        elif any(w in combined for w in ["arroz", "paella", "risotto"]):
+            target_cat = "rice"
+        elif any(w in combined for w in ["pasta", "espagueti", "lasaña"]):
+            target_cat = "pasta"
+        elif any(w in combined for w in ["pollo", "pavo"]):
+            target_cat = "chicken"
+        elif any(w in combined for w in ["carne", "ternera", "carrillera"]):
+            target_cat = "meat"
+        elif any(w in combined for w in ["pescado", "salmon", "marisco", "gamba"]):
+            target_cat = "fish"
+        elif any(w in combined for w in ["sopa", "crema", "caldo"]):
+            target_cat = "soup"
+
+        for u in category_galleries.get(target_cat, category_galleries["default"]):
+            if u not in seen:
+                seen.add(u)
+                candidates.append(u)
+
+        return candidates[:max(count, 12)]
+
+    def _get_curated_food_image(
+        self,
+        title: str,
+        dish_type: Optional[str] = None,
+        cuisine: Optional[str] = None
+    ) -> str:
+        """
+        Returns a beautifully matched high-resolution food photograph URL based on the dish title.
+        Prioritizes real-time web search for the exact dish name.
+        """
+        # 1. Search online for the exact recipe
+        try:
+            online_imgs = self.search_food_images_online(title, count=3)
+            if online_imgs:
+                return online_imgs[0]
+        except Exception as e:
+            logger.debug(f"Online photo search fallback: {e}")
+
+        # 2. Fall back to curated candidate list
+        candidates = self.get_food_image_candidates(title, dish_type, cuisine, count=8)
+        if candidates:
+            return candidates[0]
+
+        return "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80"
+
+    def suggest_recipe_tips(
+        self,
+        title: str,
+        ingredients: Optional[List[str]] = None,
+        dish_type: Optional[str] = None
+    ) -> Dict[str, str]:
+        """
+        Generates practical culinary tips, chef secrets, preservation, freezing, and reheating guidelines
+        for a given recipe using Gemini AI.
+        """
+        client = self._get_client()
+        model_to_use = self._normalize_model(self.model_name)
+
+        if client and self.is_configured():
+            try:
+                ings_summary = ", ".join(ingredients[:15]) if ingredients else "Ingredientes tradicionales del plato"
+                prompt = (
+                    f"Eres un chef profesional y experto en conservación de alimentos.\n"
+                    f"Genera consejos culinarios y de conservación muy prácticos y breves para la receta: '{title}'.\n"
+                    f"Ingredientes principales: {ings_summary}\n"
+                    f"Tipo de plato: {dish_type or 'Plato principal'}\n\n"
+                    f"Devuelve ÚNICAMENTE un JSON con estas 4 claves:\n"
+                    f"{{\n"
+                    f'  "chef_notes": "1 o 2 trucos culinarios del chef para potenciar el sabor, punto de cocción o presentación.",\n'
+                    f'  "preservation_tips": "Cómo guardarlo en la nevera y cuántos días aguanta en óptimas condiciones.",\n'
+                    f'  "freezing_tips": "Si admite congelación o no, y cómo descongelarlo adecuadamente.",\n'
+                    f'  "reheating_tips": "El mejor método para recalentar (sartén, horno, microondas) sin perder jugosidad o textura."\n'
+                    f"}}"
+                )
+                response = client.models.generate_content(
+                    model=model_to_use,
+                    contents=prompt
+                )
+                cleaned = self._clean_json_response(response.text)
+                data = json.loads(cleaned)
+                if isinstance(data, dict):
+                    return {
+                        "chef_notes": str(data.get("chef_notes", "")).strip(),
+                        "preservation_tips": str(data.get("preservation_tips", "")).strip(),
+                        "freezing_tips": str(data.get("freezing_tips", "")).strip(),
+                        "reheating_tips": str(data.get("reheating_tips", "")).strip(),
+                    }
+            except Exception as e:
+                logger.warning(f"Error suggesting recipe tips with Gemini: {e}")
+
+        # Fallback generic advice
+        return {
+            "chef_notes": f"Para realzar el sabor de {title}, cuida el punto de sal y añade un toque de hierbas frescas o aceite de oliva virgen extra justo al servir.",
+            "preservation_tips": "Guarda en recipiente hermético en el frigorífico hasta 3-4 días.",
+            "freezing_tips": "Apto para congelar en porciones individuales en recipientes herméticos o bolsas de congelación.",
+            "reheating_tips": "Calienta a fuego suave en sartén o cazo con unas gotas de agua o aceite para recuperar jugosidad."
+        }
+
 
 gemini_service = GeminiService()
+

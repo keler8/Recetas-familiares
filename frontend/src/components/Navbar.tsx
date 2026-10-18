@@ -133,10 +133,11 @@ export const Navbar: React.FC = () => {
               {user.role === 'admin' && (
                 <Link
                   to="/admin"
-                  className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors shadow-sm"
-                  title="Ajustes y Administración"
+                  className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors shadow-sm"
+                  title="Ajustes de Administración y Conectores"
                 >
                   <Shield className="w-4 h-4" />
+                  <span className="text-xs font-bold hidden md:inline">Admin</span>
                 </Link>
               )}
               <button

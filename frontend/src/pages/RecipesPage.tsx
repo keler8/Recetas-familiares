@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
   Search, Filter, Plus, Heart, Clock, Star,
   Sparkles, ChefHat, Flame, ShieldAlert, Tag,
-  Utensils, Sun, Coffee, Apple, BookOpen
+  Utensils, Sun, Coffee, Apple, BookOpen, Lock
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -15,6 +15,7 @@ export const RecipesPage: React.FC = () => {
   const [recipes, setRecipes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [visibility, setVisibility] = useState<string>(searchParams.get('visibility') || 'all');
   const [selectedAppliance, setSelectedAppliance] = useState<string>(searchParams.get('appliance') || '');
   const [selectedMealType, setSelectedMealType] = useState<string>(searchParams.get('meal_type') || '');
   const [selectedTag, setSelectedTag] = useState<string>(searchParams.get('tag') || '');
@@ -26,6 +27,8 @@ export const RecipesPage: React.FC = () => {
   useEffect(() => {
     const fav = searchParams.get('favorites') === 'true' || searchParams.get('favorites_only') === 'true';
     if (fav !== favoritesOnly) setFavoritesOnly(fav);
+    const vis = searchParams.get('visibility') || 'all';
+    if (vis !== visibility) setVisibility(vis);
     const app = searchParams.get('appliance');
     if (app !== null && app !== selectedAppliance) setSelectedAppliance(app);
     const mt = searchParams.get('meal_type');
@@ -49,6 +52,7 @@ export const RecipesPage: React.FC = () => {
       if (selectedMealType) params.append('meal_type', selectedMealType);
       if (selectedTag) params.append('tag', selectedTag);
       if (favoritesOnly) params.append('favorites_only', 'true');
+      if (visibility && visibility !== 'all') params.append('visibility', visibility);
 
       const data = await apiRequest(`/recipes?${params.toString()}`);
       setRecipes(data);
@@ -67,7 +71,7 @@ export const RecipesPage: React.FC = () => {
       fetchRecipes();
     }, 250);
     return () => clearTimeout(timer);
-  }, [search, selectedAppliance, selectedMealType, selectedTag, favoritesOnly]);
+  }, [search, visibility, selectedAppliance, selectedMealType, selectedTag, favoritesOnly]);
 
   const toggleFav = async (e: React.MouseEvent, recipeId: number) => {
     e.preventDefault();
@@ -122,20 +126,22 @@ export const RecipesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Tabs: Todas las Recetas vs Mis Favoritas */}
-      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-zinc-800">
+      {/* Tabs: Todas las Recetas vs Mi Cajón Privado vs Mis Favoritas */}
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-zinc-800 overflow-x-auto scrollbar-none">
         <button
           type="button"
           onClick={() => {
             setFavoritesOnly(false);
+            setVisibility('all');
             setSearchParams(prev => {
               prev.delete('favorites');
               prev.delete('favorites_only');
+              prev.delete('visibility');
               return prev;
             });
           }}
-          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 -mb-px ${
-            !favoritesOnly
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 -mb-px whitespace-nowrap ${
+            !favoritesOnly && visibility === 'all'
               ? 'border-amber-500 text-amber-600 dark:text-amber-400'
               : 'border-transparent text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
           }`}
@@ -147,13 +153,37 @@ export const RecipesPage: React.FC = () => {
         <button
           type="button"
           onClick={() => {
-            setFavoritesOnly(true);
+            setFavoritesOnly(false);
+            setVisibility('private');
             setSearchParams(prev => {
-              prev.set('favorites', 'true');
+              prev.delete('favorites');
+              prev.delete('favorites_only');
+              prev.set('visibility', 'private');
               return prev;
             });
           }}
-          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 -mb-px ${
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 -mb-px whitespace-nowrap ${
+            !favoritesOnly && visibility === 'private'
+              ? 'border-purple-500 text-purple-600 dark:text-purple-400'
+              : 'border-transparent text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
+          }`}
+        >
+          <Lock className="w-4 h-4" />
+          <span>Mi Cajón Privado</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setFavoritesOnly(true);
+            setVisibility('all');
+            setSearchParams(prev => {
+              prev.set('favorites', 'true');
+              prev.delete('visibility');
+              return prev;
+            });
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 -mb-px whitespace-nowrap ${
             favoritesOnly
               ? 'border-rose-500 text-rose-600 dark:text-rose-400'
               : 'border-transparent text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
@@ -262,9 +292,11 @@ export const RecipesPage: React.FC = () => {
                 type="button"
                 onClick={() => {
                   setFavoritesOnly(false);
+                  setVisibility('all');
                   setSearchParams(prev => {
                     prev.delete('favorites');
                     prev.delete('favorites_only');
+                    prev.delete('visibility');
                     return prev;
                   });
                 }}
@@ -273,6 +305,25 @@ export const RecipesPage: React.FC = () => {
                 <BookOpen className="w-4 h-4" />
                 <span>Explorar todas las recetas</span>
               </button>
+            </div>
+          </div>
+        ) : visibility === 'private' ? (
+          <div className="py-16 text-center space-y-3 bg-white dark:bg-zinc-900/40 rounded-2xl border border-purple-500/20 p-6 shadow-sm">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-purple-500/10 text-purple-500 flex items-center justify-center">
+              <Lock className="w-7 h-7 text-purple-400" />
+            </div>
+            <p className="text-slate-800 dark:text-zinc-200 font-bold text-sm">Tu cajón de recetas privadas está vacío</p>
+            <p className="text-slate-500 dark:text-zinc-400 text-xs max-w-sm mx-auto">
+              Puedes guardar recetas privadas que solo tú verás. Al crear o editar cualquier receta, marca la opción "Mi Cajón Privado".
+            </p>
+            <div className="pt-2">
+              <Link
+                to="/recipes/new"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-colors shadow-sm shadow-purple-500/20"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Nueva Receta Privada</span>
+              </Link>
             </div>
           </div>
         ) : (
@@ -296,20 +347,29 @@ export const RecipesPage: React.FC = () => {
                   alt={recipe.title}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   loading="lazy"
+                  referrerPolicy="no-referrer"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-80" />
 
-                {/* Meal Type Tag Badge */}
-                {recipe.meal_type && (
-                  <span className="absolute top-2.5 left-2.5 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-black/75 backdrop-blur-md text-amber-400 border border-white/10">
-                    {recipe.meal_type === 'desayuno' ? 'Desayuno' : recipe.meal_type === 'snacks' ? 'Snack' : recipe.meal_type === 'almuerzo_merienda' ? 'Almuerzo' : 'Comida/Cena'}
-                  </span>
-                )}
+                {/* Top Badges (Privada + Meal Type) */}
+                <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 flex-wrap z-10">
+                  {recipe.is_private && (
+                    <span className="text-[10px] font-black tracking-wider px-2 py-0.5 rounded-lg bg-purple-950/90 backdrop-blur-md text-purple-200 border border-purple-500/40 flex items-center gap-1 shadow-sm">
+                      <Lock className="w-3 h-3 text-purple-300" />
+                      <span>Privada</span>
+                    </span>
+                  )}
+                  {recipe.meal_type && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-black/75 backdrop-blur-md text-amber-400 border border-white/10">
+                      {recipe.meal_type === 'desayuno' ? 'Desayuno' : recipe.meal_type === 'snacks' ? 'Snack' : recipe.meal_type === 'almuerzo_merienda' ? 'Almuerzo' : 'Comida/Cena'}
+                    </span>
+                  )}
+                </div>
 
                 {/* Favorite Heart Button */}
                 <button
                   onClick={(e) => toggleFav(e, recipe.id)}
-                  className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white hover:scale-110 transition-transform"
+                  className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-black/60 backdrop-blur-md flex items-center justify-center text-white hover:scale-110 transition-transform z-10"
                 >
                   <Heart className={`w-4 h-4 ${recipe.is_favorite ? 'text-rose-500 fill-rose-500' : 'text-zinc-300'}`} />
                 </button>
@@ -364,9 +424,16 @@ export const RecipesPage: React.FC = () => {
                 )}
 
                 <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/80 flex items-center justify-between text-xs text-slate-500 dark:text-zinc-400">
-                  <div className="flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-amber-500" />
-                    <span>{recipe.total_time_min} min</span>
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-amber-500" />
+                      <span>{recipe.total_time_min} min</span>
+                    </span>
+                    {recipe.nutrition_calories && (
+                      <span className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400 font-bold text-[11px] bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/20 px-1.5 py-0.5 rounded">
+                        🔥 {Math.round(recipe.nutrition_calories)} kcal
+                      </span>
+                    )}
                   </div>
                   <span className="text-[11px] text-slate-400 dark:text-zinc-500">
                     {recipe.variants?.length || 1} {recipe.variants?.length === 1 ? 'modo' : 'modos de cocina'}

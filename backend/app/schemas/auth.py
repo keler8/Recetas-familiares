@@ -7,6 +7,7 @@ class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     mfa_required: bool = False
+    mfa_setup_required: bool = False
     mfa_token: Optional[str] = None
     user: Optional["UserResponse"] = None
 
@@ -33,6 +34,7 @@ class UserBase(BaseModel):
     username: str
     full_name: Optional[str] = None
     role: str = "family"
+    avatar_url: Optional[str] = None
 
 
 class UserCreate(UserBase):
@@ -65,6 +67,14 @@ class UserPreferencesSchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class UserPreferencesUpdate(BaseModel):
+    theme: Optional[str] = None
+    language: Optional[str] = None
+    default_servings: Optional[int] = None
+    widgets_config: Optional[str] = None
+    notification_channels: Optional[str] = None
 
 
 class UserResponse(UserBase):

@@ -22,6 +22,8 @@ class User(Base):
     full_name = Column(String(150), nullable=True)
     role = Column(String(50), default="family", nullable=False)  # admin / family
     is_active = Column(Boolean, default=True, nullable=False)
+    google_id = Column(String(100), unique=True, index=True, nullable=True)
+    avatar_url = Column(Text, nullable=True)
     
     # 2FA / TOTP
     mfa_enabled = Column(Boolean, default=False, nullable=False)

@@ -43,6 +43,15 @@ def seed_initial_data():
             conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS dietary_goal VARCHAR(50)"))
             conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS target_calories INTEGER"))
             conn.execute(text("ALTER TABLE nutrition_profiles ADD COLUMN IF NOT EXISTS calorie_offset INTEGER DEFAULT 0"))
+
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(100)"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500)"))
+
+            conn.execute(text("ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS source_url VARCHAR(500)"))
+            conn.execute(text("ALTER TABLE recipe_drafts ADD COLUMN IF NOT EXISTS source_url VARCHAR(500)"))
+
+            conn.execute(text("ALTER TABLE recipes ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recipes_is_private ON recipes(is_private)"))
             conn.commit()
     except Exception as e:
         logger.warning(f"Column migration notice: {e}")
@@ -213,6 +222,12 @@ def seed_initial_data():
 async def lifespan(app: FastAPI):
     logger.info("Starting Recetario Familiar backend...")
     seed_initial_data()
+    try:
+        from app.services.gemini_service import gemini_service
+        gemini_service.load_from_db()
+        logger.info(f"Gemini service loaded (is_configured={gemini_service.is_configured()})")
+    except Exception as e:
+        logger.warning(f"Could not initialize Gemini service during startup: {e}")
     yield
     logger.info("Shutting down Recetario Familiar backend...")
 
@@ -262,3 +277,13 @@ app.include_router(nutrition.router, prefix="/api")
 app.include_router(drive.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
+
+# Static files for persistent user media and recipe images
+from fastapi.staticfiles import StaticFiles
+import os
+
+os.makedirs(settings.STORAGE_PATH, exist_ok=True)
+os.makedirs(os.path.join(settings.STORAGE_PATH, "recipes"), exist_ok=True)
+os.makedirs(settings.TEMP_PATH, exist_ok=True)
+app.mount("/api/media", StaticFiles(directory=settings.STORAGE_PATH), name="media")
+

@@ -43,6 +43,12 @@ def get_current_user(
                 detail="Autenticación en dos pasos pendiente",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        if path.endswith("/mfa/setup") and not payload.get("force_setup"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El doble factor ya está configurado. Introduce tu código TOTP.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     
     user = db.query(User).filter(User.id == int(user_id)).first()
     if not user:

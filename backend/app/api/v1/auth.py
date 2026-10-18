@@ -1,18 +1,29 @@
+import base64
+import json
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.config import settings
 from app.models.auth import User, UserSession, UserPreferences
 from app.schemas.auth import (
     Token, LoginRequest, MfaVerifyRequest, MfaSetupResponse,
-    UserResponse, UserPreferencesSchema, ChangePasswordRequest, UserProfileUpdateRequest
+    UserResponse, UserPreferencesSchema, UserPreferencesUpdate, ChangePasswordRequest, UserProfileUpdateRequest
 )
 from app.services.auth_service import auth_service
+from app.services.google_auth_service import google_auth_service
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
+
+
+class GoogleTokenVerifyRequest(BaseModel):
+    credential: str
 
 
 @router.post("/login", response_model=Token)
@@ -45,14 +56,24 @@ def login(
                 {"sub": str(user.id), "mfa_pending": True, "force_setup": True},
                 expires_delta=timedelta(minutes=15)
             )
-            return Token(access_token="", mfa_required=True, mfa_token=mfa_token)
+            return Token(
+                access_token="",
+                mfa_required=True,
+                mfa_setup_required=True,
+                mfa_token=mfa_token
+            )
         else:
-            # MFA verification required
+            # Normal 2FA verification: ONLY ask for TOTP code, DO NOT ask to setup QR again!
             mfa_token = auth_service.create_access_token(
                 {"sub": str(user.id), "mfa_pending": True},
                 expires_delta=timedelta(minutes=10)
             )
-            return Token(access_token="", mfa_required=True, mfa_token=mfa_token)
+            return Token(
+                access_token="",
+                mfa_required=True,
+                mfa_setup_required=False,
+                mfa_token=mfa_token
+            )
 
     # Standard direct login
     token = auth_service.create_access_token({"sub": str(user.id), "role": user.role})
@@ -103,6 +124,11 @@ def verify_mfa(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Código TOTP o código de recuperación no válido"
         )
+
+    # CRITICAL: Activate MFA if it was pending setup, so subsequent logins never request QR setup!
+    if not user.mfa_enabled:
+        user.mfa_enabled = True
+        db.commit()
 
     # Generate full access token
     token = auth_service.create_access_token({"sub": str(user.id), "role": user.role})
@@ -239,7 +265,7 @@ def get_preferences(
 
 @router.put("/preferences", response_model=UserPreferencesSchema)
 def update_preferences(
-    prefs_in: UserPreferencesSchema,
+    prefs_in: UserPreferencesUpdate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -248,10 +274,13 @@ def update_preferences(
         prefs = UserPreferences(user_id=current_user.id)
         db.add(prefs)
 
-    prefs.theme = prefs_in.theme
-    prefs.language = prefs_in.language
-    prefs.default_servings = prefs_in.default_servings
-    if prefs_in.widgets_config:
+    if prefs_in.theme is not None:
+        prefs.theme = prefs_in.theme
+    if prefs_in.language is not None:
+        prefs.language = prefs_in.language
+    if prefs_in.default_servings is not None:
+        prefs.default_servings = prefs_in.default_servings
+    if prefs_in.widgets_config is not None:
         prefs.widgets_config = prefs_in.widgets_config
     if prefs_in.notification_channels is not None:
         prefs.notification_channels = prefs_in.notification_channels
@@ -265,3 +294,245 @@ def update_preferences(
 def logout(response: Response):
     response.delete_cookie(key="access_token")
     return {"message": "Sesión cerrada correctamente"}
+
+
+# ----------------------------------------------------
+# Google OAuth2 Login & SSO
+# ----------------------------------------------------
+
+@router.get("/google/config")
+def get_google_auth_config(db: Session = Depends(get_db)):
+    service = google_auth_service.load_from_db(db)
+    return {
+        "enabled": service.is_enabled(),
+        "client_id": service.client_id if service.is_enabled() else None
+    }
+
+
+@router.get("/google/login")
+def google_login(
+    request: Request,
+    origin: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    service = google_auth_service.load_from_db(db)
+    if not service.is_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inicio de sesión con Google no está activo o configurado en Conectores"
+        )
+
+    client_origin = origin or request.headers.get("referer") or str(request.base_url).rstrip("/")
+    # Clean client_origin if ends with /login
+    if client_origin.endswith("/login"):
+        client_origin = client_origin[:-6]
+
+    state_data = {
+        "nonce": secrets.token_hex(16),
+        "origin": client_origin
+    }
+    state_str = base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
+    auth_url = service.get_auth_url(state=state_str)
+    if not auth_url:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No se pudo generar la URL de autenticación de Google")
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/google/callback")
+def google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    service = google_auth_service.load_from_db(db)
+
+    # Resolve target frontend base URL
+    frontend_base = "/login"
+    if state:
+        try:
+            state_data = json.loads(base64.urlsafe_b64decode(state.encode()).decode())
+            if state_data.get("origin"):
+                frontend_base = f"{state_data['origin']}/login"
+        except Exception:
+            pass
+
+    if error:
+        return RedirectResponse(url=f"{frontend_base}?error={quote(f'Google OAuth: {error}')}")
+
+    if not code:
+        return RedirectResponse(url=f"{frontend_base}?error={quote('No se recibió código de autorización de Google')}")
+
+    try:
+        token_data = service.exchange_code(code)
+        access_token = token_data.get("access_token")
+        if not access_token:
+            return RedirectResponse(url=f"{frontend_base}?error={quote('No se pudo obtener el token de acceso de Google')}")
+
+        user_info = service.get_user_info(access_token)
+        email = user_info.get("email")
+        if not email:
+            return RedirectResponse(url=f"{frontend_base}?error={quote('No se pudo obtener la dirección de correo de Google')}")
+
+        email = email.strip().lower()
+        name = user_info.get("name") or email.split("@")[0]
+        picture = user_info.get("picture")
+        google_id = str(user_info.get("sub", ""))
+
+        # Check allowed domains if restricted
+        if service.allowed_domains:
+            allowed = [d.strip().lower().lstrip("@") for d in service.allowed_domains.split(",") if d.strip()]
+            user_domain = email.split("@")[-1].lower()
+            if allowed and user_domain not in allowed:
+                return RedirectResponse(url=f"{frontend_base}?error={quote('Dominio de correo no autorizado para este recetario')}")
+
+        # Find user by google_id or email
+        user = db.query(User).filter((User.google_id == google_id) | (User.email == email)).first()
+
+        if not user:
+            if not service.auto_register:
+                return RedirectResponse(url=f"{frontend_base}?error={quote('Tu cuenta de Google no está registrada en el recetario. Solicita acceso al administrador.')}")
+
+            # Generate unique username
+            base_username = email.split("@")[0].replace(".", "_")
+            username = base_username
+            counter = 1
+            while db.query(User).filter(User.username == username).first():
+                username = f"{base_username}_{counter}"
+                counter += 1
+
+            user = User(
+                email=email,
+                username=username,
+                full_name=name,
+                hashed_password=auth_service.get_password_hash(secrets.token_urlsafe(32)),
+                role="family",
+                is_active=True,
+                google_id=google_id,
+                avatar_url=picture,
+                mfa_enabled=False
+            )
+            db.add(user)
+            db.flush()
+
+            # Create personal household for user
+            from app.models.household import Household, HouseholdMembership
+            hh = Household(
+                name=f"Hogar de {user.full_name or user.username}",
+                owner_id=user.id,
+                is_personal=True
+            )
+            db.add(hh)
+            db.flush()
+            db.add(HouseholdMembership(household_id=hh.id, user_id=user.id, role="owner"))
+            db.commit()
+            db.refresh(user)
+        else:
+            if not user.is_active:
+                return RedirectResponse(url=f"{frontend_base}?error={quote('Tu cuenta de usuario está desactivada')}")
+
+            # Update google_id and avatar if missing
+            needs_update = False
+            if not user.google_id and google_id:
+                user.google_id = google_id
+                needs_update = True
+            if picture and not user.avatar_url:
+                user.avatar_url = picture
+                needs_update = True
+            if needs_update:
+                db.commit()
+
+        # Generate system access token
+        system_token = auth_service.create_access_token({"sub": str(user.id), "role": user.role})
+        return RedirectResponse(url=f"{frontend_base}?google_token={system_token}")
+
+    except Exception as e:
+        return RedirectResponse(url=f"{frontend_base}?error={quote(str(e))}")
+
+
+@router.post("/google/token", response_model=Token)
+def verify_google_token_endpoint(
+    req: GoogleTokenVerifyRequest,
+    db: Session = Depends(get_db)
+):
+    service = google_auth_service.load_from_db(db)
+    if not service.is_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inicio de sesión con Google no está activo o configurado"
+        )
+
+    try:
+        data = service.verify_id_token(req.credential)
+        email = data.get("email", "").strip().lower()
+        if not email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se pudo obtener el email del token")
+
+        google_id = str(data.get("sub", ""))
+        name = data.get("name") or email.split("@")[0]
+        picture = data.get("picture")
+
+        if service.allowed_domains:
+            allowed = [d.strip().lower().lstrip("@") for d in service.allowed_domains.split(",") if d.strip()]
+            user_domain = email.split("@")[-1].lower()
+            if allowed and user_domain not in allowed:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dominio de correo no autorizado")
+
+        user = db.query(User).filter((User.google_id == google_id) | (User.email == email)).first()
+        if not user:
+            if not service.auto_register:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Tu cuenta de Google no está registrada en el recetario"
+                )
+
+            base_username = email.split("@")[0].replace(".", "_")
+            username = base_username
+            counter = 1
+            while db.query(User).filter(User.username == username).first():
+                username = f"{base_username}_{counter}"
+                counter += 1
+
+            user = User(
+                email=email,
+                username=username,
+                full_name=name,
+                hashed_password=auth_service.get_password_hash(secrets.token_urlsafe(32)),
+                role="family",
+                is_active=True,
+                google_id=google_id,
+                avatar_url=picture,
+                mfa_enabled=False
+            )
+            db.add(user)
+            db.flush()
+
+            from app.models.household import Household, HouseholdMembership
+            hh = Household(
+                name=f"Hogar de {user.full_name or user.username}",
+                owner_id=user.id,
+                is_personal=True
+            )
+            db.add(hh)
+            db.flush()
+            db.add(HouseholdMembership(household_id=hh.id, user_id=user.id, role="owner"))
+            db.commit()
+            db.refresh(user)
+        else:
+            if not user.is_active:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario desactivado")
+            if not user.google_id and google_id:
+                user.google_id = google_id
+                db.commit()
+
+        token = auth_service.create_access_token({"sub": str(user.id), "role": user.role})
+        return Token(
+            access_token=token,
+            token_type="bearer",
+            mfa_required=False,
+            user=UserResponse.model_validate(user)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+

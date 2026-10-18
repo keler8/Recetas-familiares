@@ -9,6 +9,8 @@ export interface User {
   role: string;
   is_active: boolean;
   mfa_enabled: boolean;
+  avatar_url?: string;
+  google_id?: string;
 }
 
 interface AuthContextType {

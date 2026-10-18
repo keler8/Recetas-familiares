@@ -13,7 +13,7 @@ class Recipe(Base):
     title = Column(String(255), index=True, nullable=False)
     description = Column(Text, nullable=True)
     summary = Column(Text, nullable=True)
-    main_image_url = Column(String(500), nullable=True)
+    main_image_url = Column(Text, nullable=True)
     
     # Classification
     categories = Column(Text, nullable=True)  # JSON list of strings (e.g. ["Comidas", "Platos principales"])
@@ -47,11 +47,12 @@ class Recipe(Base):
     # Provenance and Approval
     original_author = Column(String(150), nullable=True)
     source_type = Column(String(50), default="manual", nullable=False)  # manual, drive, pdf, instagram, url, ai
-    source_url = Column(String(500), nullable=True)
+    source_url = Column(Text, nullable=True)
     review_status = Column(String(50), default="approved", nullable=False)  # approved, draft, pending_review
     times_prepared = Column(Integer, default=0, nullable=False)
 
     created_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    is_private = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

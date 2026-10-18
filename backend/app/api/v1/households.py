@@ -48,6 +48,35 @@ def get_user_households(
     return results
 
 
+@router.get("/current", response_model=HouseholdResponse)
+def get_current_household_detail(
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    members_resp = []
+    for mem in household.memberships:
+        members_resp.append(HouseholdMemberResponse(
+            id=mem.id,
+            user_id=mem.user_id,
+            username=mem.user.username,
+            email=mem.user.email,
+            role=mem.role,
+            created_at=mem.created_at
+        ))
+    diners = db.query(Diner).filter(Diner.household_id == household.id).order_by(Diner.id.asc()).all()
+    diners_resp = [DinerResponse.model_validate(d) for d in diners]
+    return HouseholdResponse(
+        id=household.id,
+        name=household.name,
+        description=household.description,
+        owner_id=household.owner_id,
+        is_personal=household.is_personal,
+        created_at=household.created_at,
+        members=members_resp,
+        diners=diners_resp
+    )
+
+
 @router.post("", response_model=HouseholdResponse)
 def create_household(
     h_in: HouseholdCreate,
@@ -174,7 +203,8 @@ def list_diners(
     household: Household = Depends(get_current_household),
     db: Session = Depends(get_db)
 ):
-    return [DinerResponse.model_validate(d) for d in household.diners]
+    diners = db.query(Diner).filter(Diner.household_id == household.id).order_by(Diner.id.asc()).all()
+    return [DinerResponse.model_validate(d) for d in diners]
 
 
 @router.post("/diners", response_model=DinerResponse)

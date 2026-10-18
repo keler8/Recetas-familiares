@@ -3,7 +3,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.database import get_db
 from app.models.auth import User
 from app.models.household import Household
@@ -14,7 +14,8 @@ from app.schemas.meal_plan import (
     MealPlanCreate, MealPlanResponse, AddRecipeToSlotRequest,
     AiMenuGenerateRequest, LeftoverCreate, LeftoverResponse,
     NutritionPlanParsedResponse, ApplyNutritionPlanRequest,
-    NutritionPlanDay, NutritionPlanMeal, NutritionPlanIngredient, NutritionPlanStep
+    NutritionPlanDay, NutritionPlanMeal, NutritionPlanIngredient, NutritionPlanStep,
+    PlannedRecipeResponse, MealSlotResponse
 )
 from app.api.deps import get_current_user, get_current_household
 from app.services.gemini_service import gemini_service
@@ -80,12 +81,73 @@ def list_meal_plans(
     return [_format_plan_response(p, db) for p in plans]
 
 
+@router.get("/active")
+def get_active_meal_plan(
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    today = date.today()
+    # Try finding plan covering today
+    plan = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date <= today,
+        MealPlan.end_date >= today
+    ).order_by(MealPlan.id.desc()).first()
+
+    if not plan:
+        # Fallback to latest plan
+        plan = db.query(MealPlan).filter(
+            MealPlan.household_id == household.id
+        ).order_by(MealPlan.start_date.desc()).first()
+
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active meal plan found")
+
+    DAY_NAMES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    items = []
+    for s in plan.slots:
+        day_name = DAY_NAMES[s.slot_date.weekday()]
+        for p in s.planned_recipes:
+            rec_obj = None
+            if p.recipe_id:
+                rec = db.query(Recipe).filter(Recipe.id == p.recipe_id).first()
+                if rec:
+                    rec_obj = {
+                        "id": rec.id,
+                        "title": rec.title,
+                        "cuisine": rec.cuisine,
+                        "image_url": rec.main_image_url
+                    }
+            items.append({
+                "id": p.id,
+                "meal_type": s.meal_type,
+                "slot_date": s.slot_date.isoformat(),
+                "day_of_week": day_name,
+                "recipe_id": p.recipe_id,
+                "custom_meal_title": p.custom_recipe_name,
+                "recipe": rec_obj
+            })
+
+    formatted = _format_plan_response(plan, db)
+    res_dict = formatted.model_dump() if hasattr(formatted, "model_dump") else formatted.dict()
+    res_dict["items"] = items
+    return res_dict
+
+
 @router.post("", response_model=MealPlanResponse)
 def create_meal_plan(
     plan_in: MealPlanCreate,
     household: Household = Depends(get_current_household),
     db: Session = Depends(get_db)
 ):
+    existing = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date == plan_in.start_date,
+        MealPlan.end_date == plan_in.end_date
+    ).first()
+    if existing:
+        return _format_plan_response(existing, db)
+
     plan = MealPlan(
         household_id=household.id,
         title=plan_in.title,
@@ -171,9 +233,12 @@ def generate_ai_menu(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Fetch approved recipes
-    recipes = db.query(Recipe).filter(Recipe.review_status == "approved").limit(30).all()
-    recipes_data = [{"id": r.id, "title": r.title, "dish_type": r.dish_type} for r in recipes]
+    # Fetch approved recipes (public or owned by user)
+    recipes = db.query(Recipe).filter(
+        Recipe.review_status == "approved",
+        or_(Recipe.is_private == False, Recipe.created_by_id == current_user.id)
+    ).limit(30).all()
+    recipes_data = [{"id": r.id, "title": r.title, "dish_type": r.dish_type, "nutrition_calories": r.nutrition_calories} for r in recipes]
 
     # Gather diners restrictions
     restrictions = []
@@ -200,27 +265,82 @@ def generate_ai_menu(
 
     proposals = gemini_service.generate_meal_plan_suggestions(recipes_data, prefs)
 
-    # Create a draft meal plan for review
-    plan = MealPlan(
-        household_id=household.id,
-        title=f"Menú Inteligente ({req.start_date.strftime('%d/%m')} - {req.end_date.strftime('%d/%m')})",
-        start_date=req.start_date,
-        end_date=req.end_date,
-        is_template=False
-    )
-    db.add(plan)
-    db.flush()
+    # Check if a meal plan already exists for this household and this date range
+    plan = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date == req.start_date,
+        MealPlan.end_date == req.end_date
+    ).first()
 
-    curr_date = req.start_date
-    for prop in proposals:
-        slot = MealSlot(
-            meal_plan_id=plan.id,
-            slot_date=curr_date,
-            meal_type=prop.get("meal_type", "comida"),
-            servings=4
-        )
-        db.add(slot)
+    if plan:
+        # Clear existing slots to regenerate cleanly
+        db.query(MealSlot).filter(MealSlot.meal_plan_id == plan.id).delete()
         db.flush()
+    else:
+        plan = MealPlan(
+            household_id=household.id,
+            title=f"Menú Inteligente ({req.start_date.strftime('%d/%m')} - {req.end_date.strftime('%d/%m')})",
+            start_date=req.start_date,
+            end_date=req.end_date,
+            is_template=False
+        )
+        db.add(plan)
+        db.flush()
+
+    day_map = {
+        "lunes": 0, "dia 1": 0, "1": 0, "monday": 0,
+        "martes": 1, "dia 2": 1, "2": 1, "tuesday": 1,
+        "miercoles": 2, "miércoles": 2, "dia 3": 2, "3": 2, "wednesday": 2,
+        "jueves": 3, "dia 4": 3, "4": 3, "thursday": 3,
+        "viernes": 4, "dia 5": 4, "5": 4, "friday": 4,
+        "sabado": 5, "sábado": 5, "dia 6": 5, "6": 5, "saturday": 5,
+        "domingo": 6, "dia 7": 6, "7": 6, "sunday": 6,
+    }
+
+    curr_fallback_date = req.start_date
+    for prop in proposals:
+        day_raw = str(prop.get("day", "")).strip().lower()
+        offset = day_map.get(day_raw)
+        if offset is not None and 0 <= offset <= 6:
+            slot_date = req.start_date + timedelta(days=offset)
+        else:
+            slot_date = curr_fallback_date
+
+        meal_raw = str(prop.get("meal_type", "comida")).strip().lower()
+        if meal_raw in ["media mañana", "mediamanana", "almuerzo", "midmorning"]:
+            meal_type = "almuerzo"
+        elif meal_raw in ["desayuno", "breakfast"]:
+            meal_type = "desayuno"
+        elif meal_raw in ["comida", "almuerzo_mediodia", "lunch"]:
+            meal_type = "comida"
+        elif meal_raw in ["merienda", "snack_tarde", "afternoon_snack"]:
+            meal_type = "merienda"
+        elif meal_raw in ["cena", "dinner"]:
+            meal_type = "cena"
+        elif meal_raw in ["snack", "snacks", "fruta"]:
+            meal_type = "snacks"
+        else:
+            meal_type = "comida"
+
+        if meal_type == "cena" and offset is None:
+            curr_fallback_date = min(req.end_date, curr_fallback_date + timedelta(days=1))
+
+        # Check if slot already exists for that date and meal_type
+        slot = db.query(MealSlot).filter(
+            MealSlot.meal_plan_id == plan.id,
+            MealSlot.slot_date == slot_date,
+            MealSlot.meal_type == meal_type
+        ).first()
+
+        if not slot:
+            slot = MealSlot(
+                meal_plan_id=plan.id,
+                slot_date=slot_date,
+                meal_type=meal_type,
+                servings=4
+            )
+            db.add(slot)
+            db.flush()
 
         planned = PlannedRecipe(
             meal_slot_id=slot.id,
@@ -230,11 +350,6 @@ def generate_ai_menu(
             servings=4
         )
         db.add(planned)
-
-        if prop.get("meal_type") == "cena":
-            curr_date += timedelta(days=1)
-            if curr_date > req.end_date:
-                break
 
     db.commit()
     db.refresh(plan)
@@ -292,8 +407,11 @@ async def import_nutrition_image(
         today = date.today()
         monday = today - timedelta(days=today.weekday())
 
-    # Pre-fetch existing approved recipes for matching
-    all_recipes = db.query(Recipe).filter(Recipe.review_status == "approved").all()
+    # Pre-fetch existing approved recipes for matching (public or owned by user)
+    all_recipes = db.query(Recipe).filter(
+        Recipe.review_status == "approved",
+        or_(Recipe.is_private == False, Recipe.created_by_id == current_user.id)
+    ).all()
 
     clean_days: List[NutritionPlanDay] = []
     days_data = parsed_raw.get("days", [])
@@ -386,6 +504,13 @@ async def import_nutrition_image(
 
     return NutritionPlanParsedResponse(
         plan_title=parsed_raw.get("plan_title", "Plan Nutricional Extraído"),
+        patient_name=parsed_raw.get("patient_name"),
+        target_calories=parsed_raw.get("target_calories"),
+        dietary_goal=parsed_raw.get("dietary_goal"),
+        habits=parsed_raw.get("habits"),
+        dietary_guidelines=parsed_raw.get("dietary_guidelines") or [],
+        preferred_foods=parsed_raw.get("preferred_foods"),
+        excluded_foods=parsed_raw.get("excluded_foods"),
         notes=parsed_raw.get("notes"),
         days=clean_days
     )
@@ -400,13 +525,57 @@ def apply_imported_nutrition_plan(
 ):
     """
     Applies an imported and reviewed nutrition plan to the specified week.
-    Optionally creates missing recipes automatically into the user's cookbook.
+    Optionally updates the target diner's nutritional profile and habits with dietitian advice.
+    Scales recipe servings and quantities for household cohabitants (household_servings).
     Populates the weekly MealPlan, MealSlots, and PlannedRecipes.
     """
     start_date = req.start_date
     end_date = start_date + timedelta(days=6)
+    household_servings = max(1, req.household_servings or 2)
 
-    # Check if a meal plan already exists for this week or create one
+    # 1. Update Diner / NutritionProfile if requested
+    if req.update_diner_profile:
+        try:
+            from app.models.household import Diner
+            diner = None
+            if req.target_diner_id:
+                diner = db.query(Diner).filter(Diner.id == req.target_diner_id, Diner.household_id == household.id).first()
+            elif req.patient_name:
+                diner = db.query(Diner).filter(
+                    Diner.household_id == household.id,
+                    Diner.name.ilike(f"%{req.patient_name.strip()}%")
+                ).first()
+
+            if diner:
+                if req.target_calories:
+                    diner.target_calories = req.target_calories
+                if req.dietary_goal:
+                    diner.dietary_goal = req.dietary_goal
+                if req.habits or req.notes:
+                    extra = f"\n[Pautas Dietista]: {req.habits or ''} {req.notes or ''}".strip()
+                    diner.notes = ((diner.notes or "") + "\n" + extra).strip()
+
+            # Also update current user NutritionProfile
+            nut_prof = db.query(NutritionProfile).filter(NutritionProfile.user_id == current_user.id).first()
+            if not nut_prof:
+                nut_prof = NutritionProfile(user_id=current_user.id)
+                db.add(nut_prof)
+            if req.target_calories:
+                nut_prof.target_calories = req.target_calories
+            if req.dietary_goal:
+                nut_prof.dietary_goal = req.dietary_goal
+            if req.habits:
+                nut_prof.cooking_habits = req.habits
+            if req.preferred_foods:
+                nut_prof.preferred_foods = req.preferred_foods
+            if req.excluded_foods:
+                nut_prof.excluded_foods = req.excluded_foods
+            if req.notes:
+                nut_prof.notes = ((nut_prof.notes or "") + f"\n[Pautas Dietista]: {req.notes}").strip()
+        except Exception as e:
+            logger.warning(f"Could not update nutrition profile or diner: {e}")
+
+    # 2. Check if a meal plan already exists for this week or create one
     plan = db.query(MealPlan).filter(
         MealPlan.household_id == household.id,
         MealPlan.start_date == start_date
@@ -440,15 +609,15 @@ def apply_imported_nutrition_plan(
                 else:
                     new_rec = Recipe(
                         title=clean_title,
-                        description=m.description or f"Receta importada del plan nutricional ({m.meal_type})",
+                        description=m.description or f"Receta importada del plan nutricional ({m.meal_type}) adaptada para {household_servings} raciones.",
                         prep_time_min=10,
                         cook_time_min=20,
                         total_time_min=30,
                         difficulty="facil",
-                        base_servings=4,
+                        base_servings=household_servings,
                         nutrition_calories=m.calories,
                         categories=json.dumps(["Comidas", "Plan Nutricional"], ensure_ascii=False),
-                        tags=json.dumps(["saludable", "plan_nutricional", "importado_ia"], ensure_ascii=False),
+                        tags=json.dumps(["saludable", "plan_nutricional", "dietista", "importado_ia"], ensure_ascii=False),
                         dish_type="Plato Principal" if m.meal_type in ["comida", "cena"] else "Desayuno / Snack",
                         meal_type="desayuno" if m.meal_type == "desayuno" else ("comida_cena" if m.meal_type in ["comida", "cena"] else "almuerzo_merienda"),
                         source_type="plan_nutricional_ia",
@@ -462,18 +631,21 @@ def apply_imported_nutrition_plan(
                     variant = RecipeVariant(
                         recipe_id=new_rec.id,
                         variant_type="traditional",
-                        title="Preparación recomendada",
+                        title=f"Preparación para {household_servings} raciones",
                         is_default=True
                     )
                     db.add(variant)
                     db.flush()
 
-                    # Add ingredients
+                    # Add ingredients scaled to household servings
                     for idx, ing in enumerate(m.ingredients):
+                        scaled_amount = None
+                        if ing.amount is not None:
+                            scaled_amount = round(float(ing.amount) * household_servings, 2)
                         db.add(RecipeIngredient(
                             variant_id=variant.id,
                             name=ing.name,
-                            amount=ing.amount,
+                            amount=scaled_amount,
                             unit=ing.unit,
                             order_index=idx
                         ))
@@ -490,7 +662,7 @@ def apply_imported_nutrition_plan(
                         db.add(RecipeStep(
                             variant_id=variant.id,
                             step_number=1,
-                            instruction=f"Preparar los ingredientes y cocinar siguiendo pautas saludables a la plancha, al vapor o al horno."
+                            instruction=f"Preparar los ingredientes adaptados para {household_servings} raciones y cocinar siguiendo pautas saludables a la plancha, al vapor o al horno."
                         ))
 
                     db.flush()
@@ -510,7 +682,7 @@ def apply_imported_nutrition_plan(
                     meal_plan_id=plan.id,
                     slot_date=slot_date,
                     meal_type=m.meal_type,
-                    servings=4
+                    servings=household_servings
                 )
                 db.add(slot)
                 db.flush()
@@ -521,7 +693,7 @@ def apply_imported_nutrition_plan(
                 recipe_id=final_recipe_id,
                 custom_recipe_name=m.title if not final_recipe_id else None,
                 custom_calories=m.calories,
-                servings=4
+                servings=household_servings
             )
             db.add(planned)
 
@@ -529,7 +701,7 @@ def apply_imported_nutrition_plan(
     db.refresh(plan)
 
     return {
-        "message": f"Plan nutricional aplicado con éxito. Se planificaron {len(req.days)} días.",
+        "message": f"Plan nutricional aplicado con éxito. Se planificaron {len(req.days)} días adaptados para {household_servings} raciones.",
         "meal_plan_id": plan.id,
         "recipes_created": recipes_created_count
     }

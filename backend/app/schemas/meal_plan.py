@@ -120,6 +120,13 @@ class NutritionPlanDay(BaseModel):
 
 class NutritionPlanParsedResponse(BaseModel):
     plan_title: str
+    patient_name: Optional[str] = None
+    target_calories: Optional[int] = None
+    dietary_goal: Optional[str] = None
+    habits: Optional[str] = None
+    dietary_guidelines: List[str] = []
+    preferred_foods: Optional[str] = None
+    excluded_foods: Optional[str] = None
     notes: Optional[str] = None
     days: List[NutritionPlanDay] = []
 
@@ -128,4 +135,15 @@ class ApplyNutritionPlanRequest(BaseModel):
     start_date: dt.date
     create_missing_recipes: bool = True
     plan_title: Optional[str] = None
+    household_servings: int = 2
+    target_diner_id: Optional[int] = None
+    update_diner_profile: bool = True
+    patient_name: Optional[str] = None
+    target_calories: Optional[int] = None
+    dietary_goal: Optional[str] = None
+    habits: Optional[str] = None
+    preferred_foods: Optional[str] = None
+    excluded_foods: Optional[str] = None
+    notes: Optional[str] = None
     days: List[NutritionPlanDay] = []
+

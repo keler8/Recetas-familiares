@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "production"
     SERVER_IP: str = "192.168.1.80"
     HOST_PORT: int = 8500
-    EXTERNAL_URL: str = "http://192.168.1.80:8500"
+    EXTERNAL_URL: str = "https://recetas.danesti.es"
 
     # Security
     SECRET_KEY: str = "default_secret_key_change_in_production"
@@ -51,7 +51,12 @@ class Settings(BaseSettings):
     # Google Drive OAuth
     GOOGLE_DRIVE_CLIENT_ID: Optional[str] = None
     GOOGLE_DRIVE_CLIENT_SECRET: Optional[str] = None
-    GOOGLE_DRIVE_REDIRECT_URI: str = "http://192.168.1.80:8500/api/drive/callback"
+    GOOGLE_DRIVE_REDIRECT_URI: str = "https://recetas.danesti.es/api/drive/callback"
+
+    # Google Auth / Sign-in
+    GOOGLE_AUTH_CLIENT_ID: Optional[str] = None
+    GOOGLE_AUTH_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_AUTH_REDIRECT_URI: str = "https://recetas.danesti.es/api/auth/google/callback"
 
     # SMTP Notifications
     SMTP_HOST: Optional[str] = None

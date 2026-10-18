@@ -4,14 +4,16 @@ import {
   Heart, Sparkles, Shield, AlertCircle, Save, Check,
   Bot, Utensils, Flame, Clock, Zap, ChefHat, Users,
   ArrowRight, CheckCircle2, Sliders, ThumbsUp, ThumbsDown,
-  Dumbbell, Target, Calculator, Plus, Trash2, Edit2, X, Activity
+  Dumbbell, Target, Calculator, Plus, Trash2, Edit2, X, Activity, FileText
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
+import { useHousehold } from '../context/HouseholdContext';
 import { DietaryAssistantModal } from '../components/DietaryAssistantModal';
 
 export const NutritionPage: React.FC = () => {
   const { t } = useLanguage();
+  const { activeHousehold } = useHousehold();
   const [profile, setProfile] = useState<any>(null);
   const [diners, setDiners] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -85,9 +87,10 @@ export const NutritionPage: React.FC = () => {
   const fetchProfileAndHousehold = async () => {
     setLoading(true);
     try {
-      const [profData, hhData] = await Promise.all([
+      const [profData, hhData, dinersData] = await Promise.all([
         apiRequest('/nutrition/profile').catch(() => null),
-        apiRequest('/households/current').catch(() => null)
+        apiRequest('/households/current').catch(() => null),
+        apiRequest<any[]>('/households/diners').catch(() => [])
       ]);
 
       if (profData) {
@@ -121,7 +124,9 @@ export const NutritionPage: React.FC = () => {
         }
       }
 
-      if (hhData && hhData.diners) {
+      if (dinersData && Array.isArray(dinersData)) {
+        setDiners(dinersData);
+      } else if (hhData && Array.isArray(hhData.diners)) {
         setDiners(hhData.diners);
       }
     } catch (err) {
@@ -133,7 +138,7 @@ export const NutritionPage: React.FC = () => {
 
   useEffect(() => {
     fetchProfileAndHousehold();
-  }, []);
+  }, [activeHousehold?.id]);
 
   // Recalculate local preview calories
   useEffect(() => {
@@ -302,6 +307,7 @@ export const NutritionPage: React.FC = () => {
       }
 
       setShowDinerModal(false);
+      setEditingDinerId(null);
       await fetchProfileAndHousehold();
     } catch (err: any) {
       alert(`Error al guardar comensal: ${err.message || err}`);
@@ -346,6 +352,33 @@ export const NutritionPage: React.FC = () => {
           <Bot className="w-4 h-4 fill-zinc-950" />
           <span>Consultar Asistente Dietético</span>
         </button>
+      </div>
+
+      {/* Dietitian Report Callout Banner */}
+      <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+        <div className="flex items-start sm:items-center gap-3.5">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-500 flex items-center justify-center shrink-0 border border-amber-500/30">
+            <FileText className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+              ¿Tienes un informe o pauta de tu nutricionista?
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-zinc-950 uppercase tracking-wider">
+                Nuevo con IA
+              </span>
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+              Sube la foto o PDF de tu dieta: la IA extraerá tus hábitos y calorías, y planificará el menú semanal adaptando las raciones para las personas que viven contigo.
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/planner?scan=diet"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition-all shrink-0 self-start sm:self-auto"
+        >
+          <Sparkles className="w-4 h-4 fill-zinc-950" />
+          <span>Subir Informe de Dietista</span>
+        </Link>
       </div>
 
       {/* Section 1: Hábitos de Deporte y Objetivo Calórico */}

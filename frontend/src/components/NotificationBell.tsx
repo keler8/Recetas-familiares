@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Bell, BellRing, Check, CheckCheck, Trash2, Settings,
   Mail, Send, Smartphone, Info, Calendar, Package, HardDrive,
@@ -60,6 +61,20 @@ export const NotificationBell: React.FC = () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isOpen]);
+  // Close modal when pressing Escape
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowPrefsModal(false);
+      }
+    };
+    if (showPrefsModal) {
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showPrefsModal]);
 
   const fetchNotifications = async () => {
     try {
@@ -332,190 +347,200 @@ export const NotificationBell: React.FC = () => {
       )}
 
       {/* User Preferences Modal */}
-      {showPrefsModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            {/* Modal Header */}
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between bg-slate-50/60 dark:bg-zinc-950/50">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500">
-                  <Settings className="w-4 h-4" />
+      {showPrefsModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+            onClick={e => {
+              if (e.target === e.currentTarget) setShowPrefsModal(false);
+            }}
+          >
+            <div className="w-full max-w-md my-auto bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[min(90vh,calc(100dvh-2rem))] animate-in fade-in zoom-in-95 duration-150">
+              {/* Modal Header */}
+              <div className="px-5 py-4 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between bg-slate-50/60 dark:bg-zinc-950/50 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500">
+                    <Settings className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">Canales de Notificación</h3>
+                    <p className="text-[11px] text-slate-500 dark:text-zinc-400">Personaliza cómo y dónde recibir alertas</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Canales de Notificación</h3>
-                  <p className="text-[11px] text-slate-500 dark:text-zinc-400">Personaliza cómo y dónde recibir alertas</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowPrefsModal(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white flex items-center justify-center"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
-              {prefsMessage && (
-                <div
-                  className={`p-3 rounded-2xl text-xs font-semibold border ${
-                    prefsMessage.includes('Error')
-                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-300'
-                      : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-300'
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => setShowPrefsModal(false)}
+                  className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white flex items-center justify-center transition-colors"
                 >
-                  {prefsMessage}
-                </div>
-              )}
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-              {/* Delivery Channels */}
-              <div className="space-y-2.5">
-                <h4 className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">
-                  Canales de Entrega
-                </h4>
-
-                {/* In-app Bell (Always ON) */}
-                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
-                  <div className="flex items-center gap-2.5">
-                    <Bell className="w-4 h-4 text-amber-500" />
-                    <div>
-                      <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Campanita en App</p>
-                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">Panel superior en la web y móvil</p>
-                    </div>
+              {/* Modal Body */}
+              <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto min-h-0">
+                {prefsMessage && (
+                  <div
+                    className={`p-3 rounded-2xl text-xs font-semibold border ${
+                      prefsMessage.includes('Error')
+                        ? 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-300'
+                        : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-300'
+                    }`}
+                  >
+                    {prefsMessage}
                   </div>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-300 border border-amber-500/30">
-                    Siempre activa
-                  </span>
+                )}
+
+                {/* Delivery Channels */}
+                <div className="space-y-2.5">
+                  <h4 className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">
+                    Canales de Entrega
+                  </h4>
+
+                  {/* In-app Bell (Always ON) */}
+                  <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
+                    <div className="flex items-center gap-2.5">
+                      <Bell className="w-4 h-4 text-amber-500" />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Campanita en App</p>
+                        <p className="text-[10px] text-slate-500 dark:text-zinc-400">Panel superior en la web y móvil</p>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-300 border border-amber-500/30">
+                      Siempre activa
+                    </span>
+                  </div>
+
+                  {/* Email (SMTP) */}
+                  <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
+                    <div className="flex items-center gap-2.5">
+                      <Mail className="w-4 h-4 text-sky-500" />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Correo Electrónico (Email)</p>
+                        <p className="text-[10px] text-slate-500 dark:text-zinc-400">Recibir avisos en tu dirección de usuario</p>
+                      </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={preferences.email}
+                        onChange={e => setPreferences({ ...preferences, email: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-slate-300 dark:bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                    </label>
+                  </div>
+
+                  {/* Telegram Bot */}
+                  <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
+                    <div className="flex items-center gap-2.5">
+                      <Send className="w-4 h-4 text-cyan-500" />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Bot de Telegram</p>
+                        <p className="text-[10px] text-slate-500 dark:text-zinc-400">Alertas instantáneas al chat familiar</p>
+                      </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={preferences.telegram}
+                        onChange={e => setPreferences({ ...preferences, telegram: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-slate-300 dark:bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                    </label>
+                  </div>
+
+                  {/* Web / Push */}
+                  <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
+                    <div className="flex items-center gap-2.5">
+                      <Smartphone className="w-4 h-4 text-emerald-500" />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Mensajes Web / Push</p>
+                        <p className="text-[10px] text-slate-500 dark:text-zinc-400">Notificaciones en móvil en modo App (PWA)</p>
+                      </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={preferences.push}
+                        onChange={e => setPreferences({ ...preferences, push: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-slate-300 dark:bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                    </label>
+                  </div>
                 </div>
 
-                {/* Email (SMTP) */}
-                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
-                  <div className="flex items-center gap-2.5">
-                    <Mail className="w-4 h-4 text-sky-500" />
+                {/* Alert Types */}
+                <div className="space-y-2.5 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                  <h4 className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">
+                    Tipos de Alerta
+                  </h4>
+
+                  <div className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800/30">
                     <div>
-                      <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Correo Electrónico (Email)</p>
-                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">Recibir avisos en tu dirección de usuario</p>
+                      <p className="text-xs font-semibold text-slate-800 dark:text-zinc-200">Menú diario planificado</p>
+                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">Recordatorio matutino de qué toca cocinar hoy</p>
                     </div>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={preferences.email}
-                      onChange={e => setPreferences({ ...preferences, email: e.target.checked })}
-                      className="sr-only peer"
+                      checked={preferences.daily_menu}
+                      onChange={e => setPreferences({ ...preferences, daily_menu: e.target.checked })}
+                      className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
                     />
-                    <div className="w-9 h-5 bg-slate-300 dark:bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
-                  </label>
-                </div>
-
-                {/* Telegram Bot */}
-                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
-                  <div className="flex items-center gap-2.5">
-                    <Send className="w-4 h-4 text-cyan-500" />
-                    <div>
-                      <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Bot de Telegram</p>
-                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">Alertas instantáneas al chat familiar</p>
-                    </div>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
+
+                  <div className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800/30">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-800 dark:text-zinc-200">Caducidad en despensa</p>
+                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">Aviso preventivo 3 días antes de expirar</p>
+                    </div>
                     <input
                       type="checkbox"
-                      checked={preferences.telegram}
-                      onChange={e => setPreferences({ ...preferences, telegram: e.target.checked })}
-                      className="sr-only peer"
+                      checked={preferences.pantry_expiry}
+                      onChange={e => setPreferences({ ...preferences, pantry_expiry: e.target.checked })}
+                      className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
                     />
-                    <div className="w-9 h-5 bg-slate-300 dark:bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
-                  </label>
-                </div>
-
-                {/* Web / Push */}
-                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-slate-200 dark:border-zinc-700/40">
-                  <div className="flex items-center gap-2.5">
-                    <Smartphone className="w-4 h-4 text-emerald-500" />
-                    <div>
-                      <p className="text-xs font-bold text-slate-900 dark:text-zinc-100">Mensajes Web / Push</p>
-                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">Notificaciones en móvil en modo App (PWA)</p>
-                    </div>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
+
+                  <div className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800/30">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-800 dark:text-zinc-200">Alertas de almacenamiento</p>
+                      <p className="text-[10px] text-slate-500 dark:text-zinc-400">Avisos si el espacio en disco baja del límite seguro</p>
+                    </div>
                     <input
                       type="checkbox"
-                      checked={preferences.push}
-                      onChange={e => setPreferences({ ...preferences, push: e.target.checked })}
-                      className="sr-only peer"
+                      checked={preferences.storage_alerts}
+                      onChange={e => setPreferences({ ...preferences, storage_alerts: e.target.checked })}
+                      className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
                     />
-                    <div className="w-9 h-5 bg-slate-300 dark:bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
-                  </label>
+                  </div>
                 </div>
               </div>
 
-              {/* Alert Types */}
-              <div className="space-y-2.5 pt-2 border-t border-slate-100 dark:border-zinc-800">
-                <h4 className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">
-                  Tipos de Alerta
-                </h4>
-
-                <div className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800/30">
-                  <div>
-                    <p className="text-xs font-semibold text-slate-800 dark:text-zinc-200">Menú diario planificado</p>
-                    <p className="text-[10px] text-slate-500 dark:text-zinc-400">Recordatorio matutino de qué toca cocinar hoy</p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={preferences.daily_menu}
-                    onChange={e => setPreferences({ ...preferences, daily_menu: e.target.checked })}
-                    className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800/30">
-                  <div>
-                    <p className="text-xs font-semibold text-slate-800 dark:text-zinc-200">Caducidad en despensa</p>
-                    <p className="text-[10px] text-slate-500 dark:text-zinc-400">Aviso preventivo 3 días antes de expirar</p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={preferences.pantry_expiry}
-                    onChange={e => setPreferences({ ...preferences, pantry_expiry: e.target.checked })}
-                    className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-zinc-800/30">
-                  <div>
-                    <p className="text-xs font-semibold text-slate-800 dark:text-zinc-200">Alertas de almacenamiento</p>
-                    <p className="text-[10px] text-slate-500 dark:text-zinc-400">Avisos si el espacio en disco baja del límite seguro</p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={preferences.storage_alerts}
-                    onChange={e => setPreferences({ ...preferences, storage_alerts: e.target.checked })}
-                    className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500"
-                  />
-                </div>
+              {/* Modal Footer */}
+              <div className="px-5 py-3 border-t border-slate-100 dark:border-zinc-800 bg-slate-50/60 dark:bg-zinc-950/50 flex items-center justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowPrefsModal(false)}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800"
+                >
+                  Cerrar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSavePreferences}
+                  disabled={savingPrefs}
+                  className="px-4 py-1.5 rounded-xl text-xs font-bold bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
+                >
+                  {savingPrefs && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  Guardar Preferencias
+                </button>
               </div>
             </div>
-
-            {/* Modal Footer */}
-            <div className="px-5 py-3 border-t border-slate-100 dark:border-zinc-800 bg-slate-50/60 dark:bg-zinc-950/50 flex items-center justify-end gap-2">
-              <button
-                onClick={() => setShowPrefsModal(false)}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800"
-              >
-                Cerrar
-              </button>
-              <button
-                onClick={handleSavePreferences}
-                disabled={savingPrefs}
-                className="px-4 py-1.5 rounded-xl text-xs font-bold bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
-              >
-                {savingPrefs && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                Guardar Preferencias
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

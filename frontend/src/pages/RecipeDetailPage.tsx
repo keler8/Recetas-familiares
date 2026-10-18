@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Heart, Clock, Star, ChefHat, Play,
   Sparkles, Flame, Check, MessageSquare, StickyNote,
-  AlertTriangle, Share2, Edit3
+  AlertTriangle, Share2, Edit3, ExternalLink, Trash2, Lock, Lightbulb
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -16,12 +16,60 @@ export const RecipeDetailPage: React.FC = () => {
 
   const [recipe, setRecipe] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null);
   const [selectedServings, setSelectedServings] = useState<number>(4);
   const [scaledData, setScaledData] = useState<any>(null);
   const [personalNote, setPersonalNote] = useState<string>('');
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isGeneratingVariant, setIsGeneratingVariant] = useState(false);
+  const [isRecalculatingNutrition, setIsRecalculatingNutrition] = useState(false);
+
+  const handleRecalculateNutrition = async () => {
+    if (!recipe) return;
+    setIsRecalculatingNutrition(true);
+    try {
+      const updated = await apiRequest(`/recipes/${recipe.id}/recalculate-nutrition`, {
+        method: 'POST'
+      });
+      setRecipe(updated);
+    } catch (err: any) {
+      alert(`Error al estimar calorías: ${err.message || err}`);
+    } finally {
+      setIsRecalculatingNutrition(false);
+    }
+  };
+
+  const [isGeneratingTips, setIsGeneratingTips] = useState(false);
+  const handleGenerateTips = async () => {
+    if (!recipe) return;
+    setIsGeneratingTips(true);
+    try {
+      const updated = await apiRequest(`/recipes/${recipe.id}/suggest-tips`, {
+        method: 'POST'
+      });
+      setRecipe(updated);
+    } catch (err: any) {
+      alert(`Error al generar consejos con IA: ${err.message || err}`);
+    } finally {
+      setIsGeneratingTips(false);
+    }
+  };
+
+  const handleDeleteRecipe = async () => {
+    if (!recipe) return;
+    const ok = window.confirm(`¿Estás seguro de que deseas eliminar permanentemente la receta "${recipe.title}"? Esta acción no se puede deshacer.`);
+    if (!ok) return;
+
+    setIsDeleting(true);
+    try {
+      await apiRequest(`/recipes/${recipe.id}`, { method: 'DELETE' });
+      navigate('/recipes');
+    } catch (err: any) {
+      alert(`Error al eliminar receta: ${err.message || err}`);
+      setIsDeleting(false);
+    }
+  };
 
   const fetchRecipe = async () => {
     setLoading(true);
@@ -134,6 +182,7 @@ export const RecipeDetailPage: React.FC = () => {
         <img
           src={recipe.main_image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?auto=format&fit=crop&w=800&q=80'}
           alt={recipe.title}
+          referrerPolicy="no-referrer"
           className="w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/20 to-transparent" />
@@ -148,9 +197,27 @@ export const RecipeDetailPage: React.FC = () => {
           </button>
 
           <div className="flex items-center gap-2">
+            <Link
+              to={`/recipes/${recipe.id}/edit`}
+              className="w-10 h-10 rounded-full bg-zinc-950/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-white hover:bg-zinc-800/80 hover:scale-105 transition-all shadow-sm"
+              title="Editar receta"
+            >
+              <Edit3 className="w-4 h-4" />
+            </Link>
+
+            <button
+              onClick={handleDeleteRecipe}
+              disabled={isDeleting}
+              className="w-10 h-10 rounded-full bg-zinc-950/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-rose-400 hover:text-rose-300 hover:bg-rose-500/20 hover:scale-105 transition-all shadow-sm disabled:opacity-50"
+              title="Eliminar receta"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+
             <button
               onClick={toggleFav}
               className="w-10 h-10 rounded-full bg-zinc-950/60 backdrop-blur-md border border-white/10 flex items-center justify-center text-white hover:scale-105 transition-transform"
+              title="Añadir a favoritos"
             >
               <Heart className={`w-5 h-5 ${recipe.is_favorite ? 'text-rose-500 fill-rose-500' : 'text-zinc-200'}`} />
             </button>
@@ -171,6 +238,12 @@ export const RecipeDetailPage: React.FC = () => {
 
           {/* Badges: Thermomix, Tradicional, Sin Gluten, etc. */}
           <div className="flex flex-wrap items-center gap-2 mt-3">
+            {recipe.is_private && (
+              <span className="px-2.5 py-1 rounded-lg text-xs font-black bg-purple-500/25 border border-purple-500/40 text-purple-300 flex items-center gap-1.5 shadow-sm">
+                <Lock className="w-3.5 h-3.5 text-purple-400" />
+                <span>Receta Privada</span>
+              </span>
+            )}
             {recipe.variants?.map((v: any) => (
               <span
                 key={v.id}
@@ -187,7 +260,70 @@ export const RecipeDetailPage: React.FC = () => {
                 {t}
               </span>
             ))}
+            {recipe.source_url && (recipe.source_url.startsWith('http://') || recipe.source_url.startsWith('https://')) && (
+              <a
+                href={recipe.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-950/40 hover:bg-blue-900/60 border border-blue-500/30 text-blue-300 transition-colors flex items-center gap-1.5"
+                title="Abrir documento original"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
+                <span>{recipe.source_url.includes('google.com') ? 'Google Drive' : 'Fuente'}</span>
+              </a>
+            )}
           </div>
+
+          {recipe.is_private && (
+            <div className="mt-3 p-3 rounded-xl bg-purple-950/30 border border-purple-500/30 flex items-center gap-2.5 text-xs text-purple-300 shadow-sm">
+              <Lock className="w-4 h-4 text-purple-400 shrink-0" />
+              <span>Esta receta está en tu cajón personal privado. Solo tú puedes verla en tu cuenta.</span>
+            </div>
+          )}
+
+          {/* Nutritional Info Banner */}
+          {recipe.nutrition_calories ? (
+            <div className="mt-4 p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-500/5 border border-amber-500/20 flex items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                  <Flame className="w-5 h-5 fill-amber-500/30 text-amber-400" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-amber-400">
+                    {Math.round(recipe.nutrition_calories)} kcal <span className="text-[11px] text-zinc-400 font-normal">/ ración</span>
+                  </div>
+                  <div className="text-[11px] text-zinc-400 flex items-center gap-2 mt-0.5 flex-wrap">
+                    {recipe.nutrition_protein && <span>🥩 Prot: <strong className="text-zinc-200">{Math.round(recipe.nutrition_protein)}g</strong></span>}
+                    {recipe.nutrition_carbs && <span>🌾 Carbs: <strong className="text-zinc-200">{Math.round(recipe.nutrition_carbs)}g</strong></span>}
+                    {recipe.nutrition_fat && <span>🥑 Grasas: <strong className="text-zinc-200">{Math.round(recipe.nutrition_fat)}g</strong></span>}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleRecalculateNutrition}
+                disabled={isRecalculatingNutrition}
+                className="text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 text-zinc-300 transition-all shrink-0 flex items-center gap-1.5 shadow"
+                title="Recalcular calorías y macros con Gemini IA"
+              >
+                <Sparkles className={`w-3.5 h-3.5 text-amber-400 ${isRecalculatingNutrition ? 'animate-spin' : ''}`} />
+                <span>{isRecalculatingNutrition ? 'Calculando...' : 'Re-estimar'}</span>
+              </button>
+            </div>
+          ) : (
+            <div className="mt-4 p-3 rounded-2xl bg-zinc-900/70 border border-zinc-800 flex items-center justify-between gap-2 text-xs">
+              <span className="text-zinc-400">🔥 Calorías no estimadas aún</span>
+              <button
+                type="button"
+                onClick={handleRecalculateNutrition}
+                disabled={isRecalculatingNutrition}
+                className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/30 transition-all shadow"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${isRecalculatingNutrition ? 'animate-spin' : ''}`} />
+                <span>{isRecalculatingNutrition ? 'Calculando con IA...' : 'Calcular calorías con IA'}</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Modo de preparación Selector matching Screenshot 3 */}
@@ -329,6 +465,76 @@ export const RecipeDetailPage: React.FC = () => {
           </div>
         </div>
 
+        {/* Consejos, Trucos y Conservación */}
+        <div className="p-4 md:p-5 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3.5 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-2">
+              <Lightbulb className="w-4 h-4 text-amber-400" />
+              <span>Consejos y Trucos de la Receta</span>
+            </h3>
+
+            {(!recipe.chef_notes && !recipe.preservation_tips && !recipe.freezing_tips && !recipe.reheating_tips) && (
+              <button
+                type="button"
+                onClick={handleGenerateTips}
+                disabled={isGeneratingTips}
+                className="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition-all disabled:opacity-50 shadow-sm"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${isGeneratingTips ? 'animate-spin' : ''}`} />
+                <span>{isGeneratingTips ? 'Generando...' : 'Obtener trucos con IA'}</span>
+              </button>
+            )}
+          </div>
+
+          {(recipe.chef_notes || recipe.preservation_tips || recipe.freezing_tips || recipe.reheating_tips) ? (
+            <div className="space-y-3">
+              {recipe.chef_notes && (
+                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs space-y-1">
+                  <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>👨‍🍳 Secreto del Chef</span>
+                  </div>
+                  <p className="text-zinc-200 leading-relaxed">
+                    {recipe.chef_notes}
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                {recipe.preservation_tips && (
+                  <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800/90 space-y-1 text-xs">
+                    <span className="font-bold text-zinc-300 block">🧊 Conservación</span>
+                    <p className="text-zinc-400 text-[11px] leading-relaxed">{recipe.preservation_tips}</p>
+                  </div>
+                )}
+                {recipe.freezing_tips && (
+                  <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800/90 space-y-1 text-xs">
+                    <span className="font-bold text-zinc-300 block">❄️ Congelación</span>
+                    <p className="text-zinc-400 text-[11px] leading-relaxed">{recipe.freezing_tips}</p>
+                  </div>
+                )}
+                {recipe.reheating_tips && (
+                  <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800/90 space-y-1 text-xs">
+                    <span className="font-bold text-zinc-300 block">♨️ Recalentado</span>
+                    <p className="text-zinc-400 text-[11px] leading-relaxed">{recipe.reheating_tips}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-zinc-950/60 border border-dashed border-zinc-800 text-xs text-zinc-400 flex items-center justify-between">
+              <span>Aún no hay trucos guardados para esta receta.</span>
+              <button
+                type="button"
+                onClick={handleGenerateTips}
+                disabled={isGeneratingTips}
+                className="text-xs font-bold text-amber-400 hover:text-amber-300 underline"
+              >
+                Generar con IA
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Generate AI Variant Button */}
         <div className="p-4 rounded-xl bg-zinc-900 border border-zinc-800 space-y-2">
           <div className="flex items-center gap-2 text-sm font-bold text-white">
@@ -355,6 +561,34 @@ export const RecipeDetailPage: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Original Document / Provenance */}
+        {recipe.source_url && (recipe.source_url.startsWith('http://') || recipe.source_url.startsWith('https://')) && (
+          <div className="p-4 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
+                <ExternalLink className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate">
+                  {recipe.source_url.includes('google.com') ? 'Documento original en Google Drive' : 'Fuente original de la receta'}
+                </p>
+                <p className="text-[11px] text-zinc-400 truncate">
+                  {recipe.source_url.includes('docs.google.com/document') ? 'Google Doc editable original' : 'Archivo original importado'}
+                </p>
+              </div>
+            </div>
+            <a
+              href={recipe.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shrink-0 transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
+            >
+              <span>Abrir archivo</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        )}
 
         {/* Private Personal Notes */}
         <div className="space-y-2">

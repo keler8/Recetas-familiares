@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Calendar as CalendarIcon, Sparkles, Plus, Clock,
   ChevronLeft, ChevronRight, CheckCircle, Utensils,
   Package, Trash2, ArrowRight, Flame, Search, X, Apple, Coffee, Sun, Moon, ShoppingBag,
-  Camera, UploadCloud, FileText, Check, AlertCircle, RefreshCw, ChefHat, BookOpen
+  Camera, UploadCloud, FileText, Check, AlertCircle, RefreshCw, ChefHat, BookOpen,
+  User, Users, Target, Heart, Sliders, Activity
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -19,17 +21,19 @@ const MEAL_TYPES = [
 
 export const PlannerPage: React.FC = () => {
   const { t } = useLanguage();
+  const location = useLocation();
   const [plans, setPlans] = useState<any[]>([]);
   const [activePlan, setActivePlan] = useState<any>(null);
   const [leftovers, setLeftovers] = useState<any[]>([]);
   const [recipesList, setRecipesList] = useState<any[]>([]);
+  const [dinersList, setDinersList] = useState<any[]>([]);
   const [targetCalories, setTargetCalories] = useState<number>(2000);
   const [isGenerating, setIsGenerating] = useState(false);
 
   // Week offset state
   const [weekOffset, setWeekOffset] = useState(0);
 
-  // Photo Scan Nutrition Plan State
+  // Photo Scan Nutrition Plan / Dietitian Report State
   const [showScanModal, setShowScanModal] = useState(false);
   const [scanFile, setScanFile] = useState<File | null>(null);
   const [scanPreview, setScanPreview] = useState<string | null>(null);
@@ -39,6 +43,15 @@ export const PlannerPage: React.FC = () => {
   const [createMissingRecipes, setCreateMissingRecipes] = useState(true);
   const [isApplyingPlan, setIsApplyingPlan] = useState(false);
   const [scanSuccessMessage, setScanSuccessMessage] = useState<string | null>(null);
+
+  // Dietitian report specific states: patient habits & household servings
+  const [targetDinerId, setTargetDinerId] = useState<number | null>(null);
+  const [householdServings, setHouseholdServings] = useState<number>(2);
+  const [updateDinerProfile, setUpdateDinerProfile] = useState<boolean>(true);
+  const [patientName, setPatientName] = useState<string>('');
+  const [patientCalories, setPatientCalories] = useState<number | ''>('');
+  const [patientGoal, setPatientGoal] = useState<string>('mantenimiento');
+  const [patientHabits, setPatientHabits] = useState<string>('');
 
   // Add Item / Recipe Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -88,9 +101,14 @@ export const PlannerPage: React.FC = () => {
   const fetchPlans = async () => {
     try {
       const data = await apiRequest('/meal-plans');
-      setPlans(data);
-      if (data.length > 0) {
-        setActivePlan(data[0]);
+      setPlans(data || []);
+      if (data && data.length > 0) {
+        const weekStart = weekDays[0].isoDate;
+        const weekEnd = weekDays[6].isoDate;
+        const matchingPlan = data.find((p: any) => p.start_date <= weekEnd && p.end_date >= weekStart) || data[0];
+        setActivePlan(matchingPlan);
+      } else {
+        setActivePlan(null);
       }
     } catch (err) {
       console.warn('Error fetching plans:', err);
@@ -108,11 +126,13 @@ export const PlannerPage: React.FC = () => {
 
   const fetchRecipesAndProfile = async () => {
     try {
-      const [recs, nutProfile] = await Promise.all([
+      const [recs, nutProfile, diners] = await Promise.all([
         apiRequest('/recipes?limit=100').catch(() => []),
-        apiRequest('/nutrition/profile').catch(() => null)
+        apiRequest('/nutrition/profile').catch(() => null),
+        apiRequest<any[]>('/households/diners').catch(() => [])
       ]);
-      setRecipesList(recs);
+      setRecipesList(recs || []);
+      setDinersList(diners || []);
       if (nutProfile && nutProfile.target_calories) {
         setTargetCalories(nutProfile.target_calories);
       }
@@ -126,6 +146,27 @@ export const PlannerPage: React.FC = () => {
     fetchLeftovers();
     fetchRecipesAndProfile();
   }, []);
+
+  // Listen to URL query params to auto-open diet scan modal (e.g. from /nutrition or /imports)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('scan') === 'diet' || params.get('scan') === 'true') {
+      setShowScanModal(true);
+      setParsedPlan(null);
+      setScanFile(null);
+      setScanPreview(null);
+    }
+  }, [location.search]);
+
+  // Update active plan when week navigation changes
+  useEffect(() => {
+    if (plans.length > 0) {
+      const weekStart = weekDays[0].isoDate;
+      const weekEnd = weekDays[6].isoDate;
+      const matchingPlan = plans.find((p: any) => p.start_date <= weekEnd && p.end_date >= weekStart);
+      setActivePlan(matchingPlan || null);
+    }
+  }, [weekOffset, plans]);
 
   const handleGenerateAiMenu = async () => {
     setIsGenerating(true);
@@ -145,7 +186,6 @@ export const PlannerPage: React.FC = () => {
         })
       });
       await fetchPlans();
-      alert('¡Menú semanal sugerido con éxito cubriendo desayunos, almuerzos, comidas, meriendas y cenas!');
     } catch (err: any) {
       alert(`Error al generar menú: ${err.message || err}`);
     } finally {
@@ -166,20 +206,39 @@ export const PlannerPage: React.FC = () => {
 
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activePlan) {
-      alert('Primero crea o genera un plan de menú para esta semana.');
-      return;
-    }
-
     setIsSavingItem(true);
     try {
+      // Find or auto-create a meal plan for this date/week
+      let targetPlanId = plans.find((p: any) => p.start_date <= modalDate && p.end_date >= modalDate)?.id;
+
+      if (!targetPlanId) {
+        if (activePlan && activePlan.start_date <= modalDate && activePlan.end_date >= modalDate) {
+          targetPlanId = activePlan.id;
+        } else {
+          // Auto-create plan for the viewed week on the fly
+          const weekStart = weekDays[0].isoDate;
+          const weekEnd = weekDays[6].isoDate;
+          const newPlan = await apiRequest('/meal-plans', {
+            method: 'POST',
+            body: JSON.stringify({
+              title: `Menú (${weekDays[0].displayDate} - ${weekDays[6].displayDate})`,
+              start_date: weekStart,
+              end_date: weekEnd,
+              is_template: false
+            })
+          });
+          targetPlanId = newPlan.id;
+          setActivePlan(newPlan);
+        }
+      }
+
       if (modalTab === 'recipe') {
         if (!selectedRecipeId) {
           alert('Selecciona una receta de la lista.');
           setIsSavingItem(false);
           return;
         }
-        await apiRequest(`/meal-plans/${activePlan.id}/add-recipe`, {
+        await apiRequest(`/meal-plans/${targetPlanId}/add-recipe`, {
           method: 'POST',
           body: JSON.stringify({
             slot_date: modalDate,
@@ -194,7 +253,7 @@ export const PlannerPage: React.FC = () => {
           setIsSavingItem(false);
           return;
         }
-        await apiRequest(`/meal-plans/${activePlan.id}/add-recipe`, {
+        await apiRequest(`/meal-plans/${targetPlanId}/add-recipe`, {
           method: 'POST',
           body: JSON.stringify({
             slot_date: modalDate,
@@ -286,6 +345,10 @@ export const PlannerPage: React.FC = () => {
         body: formData
       });
       setParsedPlan(data);
+      if (data.patient_name) setPatientName(data.patient_name);
+      if (data.target_calories) setPatientCalories(data.target_calories);
+      if (data.dietary_goal) setPatientGoal(data.dietary_goal);
+      if (data.habits) setPatientHabits(data.habits);
     } catch (err: any) {
       setScanError(err.message || 'Error al analizar la imagen con IA');
     } finally {
@@ -303,13 +366,21 @@ export const PlannerPage: React.FC = () => {
           start_date: weekDays[0].isoDate,
           create_missing_recipes: createMissingRecipes,
           plan_title: parsedPlan.plan_title,
+          household_servings: householdServings,
+          target_diner_id: targetDinerId,
+          update_diner_profile: updateDinerProfile,
+          patient_name: patientName || null,
+          target_calories: patientCalories ? Number(patientCalories) : null,
+          dietary_goal: patientGoal,
+          habits: patientHabits || null,
+          notes: parsedPlan.notes,
           days: parsedPlan.days
         })
       });
       setScanSuccessMessage(
         res.recipes_created > 0
-          ? `¡Plan aplicado! Se importó la semana y se crearon ${res.recipes_created} nuevas recetas en tu recetario.`
-          : `¡Plan semanal aplicado con éxito!`
+          ? `¡Plan nutricional aplicado! Se adaptaron las comidas para ${householdServings} raciones y se crearon ${res.recipes_created} nuevas recetas en tu recetario.`
+          : `¡Plan semanal aplicado con éxito para ${householdServings} raciones!`
       );
       await fetchPlans();
       await fetchRecipesAndProfile();
@@ -343,23 +414,41 @@ export const PlannerPage: React.FC = () => {
     setParsedPlan({ ...parsedPlan, days: updatedDays });
   };
 
-  // Helper to extract items for a given date and meal_type from active plan
+  // Helper to extract items for a given date and meal_type
   const getSlotItems = (isoDate: string, mealType: string) => {
-    if (!activePlan || !activePlan.slots) return [];
-    const slot = activePlan.slots.find(
-      (s: any) => s.slot_date === isoDate && s.meal_type === mealType
-    );
-    return slot ? slot.planned_recipes || [] : [];
+    if (activePlan?.slots) {
+      const slot = activePlan.slots.find(
+        (s: any) => s.slot_date === isoDate && s.meal_type === mealType
+      );
+      if (slot && slot.planned_recipes && slot.planned_recipes.length > 0) {
+        return slot.planned_recipes;
+      }
+    }
+    // Search across any other loaded plans that might contain this slot date
+    for (const plan of plans) {
+      if (plan.id === activePlan?.id) continue;
+      const slot = plan.slots?.find(
+        (s: any) => s.slot_date === isoDate && s.meal_type === mealType
+      );
+      if (slot && slot.planned_recipes && slot.planned_recipes.length > 0) {
+        return slot.planned_recipes;
+      }
+    }
+    return [];
   };
 
   // Helper to compute total calories for an entire day
   const getDayTotalCalories = (isoDate: string) => {
-    if (!activePlan || !activePlan.slots) return 0;
-    const daySlots = activePlan.slots.filter((s: any) => s.slot_date === isoDate);
     let total = 0;
-    for (const s of daySlots) {
-      for (const p of s.planned_recipes || []) {
-        if (p.calories) total += p.calories;
+    const countedSlotIds = new Set<number>();
+    for (const plan of plans) {
+      const daySlots = plan.slots?.filter((s: any) => s.slot_date === isoDate) || [];
+      for (const s of daySlots) {
+        if (countedSlotIds.has(s.id)) continue;
+        countedSlotIds.add(s.id);
+        for (const p of s.planned_recipes || []) {
+          if (p.calories) total += p.calories;
+        }
       }
     }
     return Math.round(total);
@@ -394,8 +483,8 @@ export const PlannerPage: React.FC = () => {
             }}
             className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-amber-500/50 text-slate-800 dark:text-zinc-200 font-bold text-xs shadow-sm hover:shadow transition-all"
           >
-            <Camera className="w-4 h-4 text-amber-500" />
-            <span>📸 Escanear Plan desde Foto</span>
+            <FileText className="w-4 h-4 text-amber-500" />
+            <span>📋 Subir Informe de Dietista con IA</span>
           </button>
 
           <button
@@ -849,7 +938,7 @@ export const PlannerPage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Scan Nutrition Plan Photo */}
+      {/* Modal: Scan Nutrition Plan / Dietitian Report */}
       {showScanModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 md:p-6 overflow-y-auto">
           <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-5 md:p-6 max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl space-y-4">
@@ -858,17 +947,17 @@ export const PlannerPage: React.FC = () => {
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-zinc-800">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500">
-                  <Camera className="w-5 h-5" />
+                  <FileText className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base md:text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
-                    Escanear Plan Nutricional con IA
+                    Informe de Dietista & Plan Nutricional con IA
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-zinc-950 uppercase tracking-wider">
                       Gemini Vision
                     </span>
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-zinc-400">
-                    Sube una foto de tu dieta o menú impreso para importar la semana completa y guardar sus recetas
+                    Sube una foto o PDF de la pauta de tu nutricionista para extraer hábitos, recetas y adaptar las raciones para el hogar
                   </p>
                 </div>
               </div>
@@ -906,53 +995,134 @@ export const PlannerPage: React.FC = () => {
             {/* Step 1: Upload & Options */}
             {!parsedPlan && !scanSuccessMessage && (
               <div className="space-y-4 py-2 overflow-y-auto">
-                {/* File Dropzone */}
+                {/* File Dropzone & Selectors */}
                 <div className="border-2 border-dashed border-slate-200 dark:border-zinc-800 hover:border-amber-500/50 rounded-3xl p-6 text-center transition-colors bg-slate-50/50 dark:bg-zinc-950/50">
-                  {scanPreview ? (
+                  {scanFile ? (
                     <div className="space-y-3">
-                      <div className="relative inline-block max-w-xs max-h-56 rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 shadow-md">
-                        <img src={scanPreview} alt="Vista previa del plan" className="w-full h-auto object-cover" />
+                      <div className="relative inline-block max-w-xs rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 shadow-md">
+                        {scanPreview ? (
+                          <img src={scanPreview} alt="Vista previa del informe" className="w-full max-h-56 object-cover rounded-xl" />
+                        ) : (
+                          <div className="py-6 px-8 flex flex-col items-center gap-2 text-rose-500">
+                            <FileText className="w-14 h-14" />
+                            <span className="text-xs font-bold text-slate-700 dark:text-zinc-200 uppercase tracking-wider">
+                              Documento PDF
+                            </span>
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => { setScanFile(null); setScanPreview(null); }}
                           className="absolute top-2 right-2 p-1.5 rounded-xl bg-black/60 text-white hover:bg-rose-600 transition-colors"
-                          title="Quitar foto"
+                          title="Quitar archivo"
                         >
                           <X className="w-4 h-4" />
                         </button>
                       </div>
                       <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">
-                        {scanFile?.name} ({(scanFile ? scanFile.size / 1024 : 0).toFixed(1)} KB)
+                        {scanFile.name} ({(scanFile.size / 1024).toFixed(1)} KB)
                       </p>
                     </div>
                   ) : (
-                    <label className="cursor-pointer flex flex-col items-center gap-3">
+                    <div className="flex flex-col items-center gap-4 py-2">
                       <div className="w-14 h-14 rounded-3xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shadow-inner">
                         <UploadCloud className="w-7 h-7" />
                       </div>
                       <div>
                         <span className="text-xs md:text-sm font-bold text-slate-900 dark:text-white block">
-                          Pulsa para seleccionar o hacer una foto de tu plan nutricional
+                          Sube tu informe de dietista o menú pautado
                         </span>
                         <span className="text-[11px] text-slate-500 dark:text-zinc-400 block mt-0.5">
-                          Formatos aceptados: Fotos de cámara, JPG, PNG, WEBP o documentos PDF
+                          Elige si prefieres seleccionar un archivo PDF, elegir de tu galería o tomar una foto
                         </span>
                       </div>
-                      <input
-                        type="file"
-                        accept="image/*,application/pdf"
-                        capture="environment"
-                        onChange={handleFileChange}
-                        className="hidden"
-                      />
-                    </label>
+
+                      {/* Action buttons: Files/PDF/Gallery vs Camera */}
+                      <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                        {/* Option 1: File / PDF / Gallery */}
+                        <label className="cursor-pointer flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 hover:border-amber-500 text-slate-800 dark:text-zinc-200 font-bold text-xs shadow-sm hover:shadow transition-all">
+                          <FileText className="w-4 h-4 text-rose-500" />
+                          <span>Elegir PDF o Galería</span>
+                          <input
+                            type="file"
+                            accept="application/pdf,image/*,.pdf"
+                            onChange={handleFileChange}
+                            className="hidden"
+                          />
+                        </label>
+
+                        {/* Option 2: Direct Camera */}
+                        <label className="cursor-pointer flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-600 dark:text-amber-400 font-bold text-xs shadow-sm hover:shadow transition-all">
+                          <Camera className="w-4 h-4" />
+                          <span>Hacer foto con la cámara</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            onChange={handleFileChange}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                    </div>
                   )}
+                </div>
+
+                {/* Patient & Household Servings Setup */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-2xl bg-slate-100/70 dark:bg-zinc-800/50 border border-slate-200/80 dark:border-zinc-700/60">
+                  {/* Assigned Person */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 flex items-center gap-1.5 mb-1.5">
+                      <User className="w-3.5 h-3.5 text-amber-500" />
+                      <span>¿A quién pertenece este informe?</span>
+                    </label>
+                    <select
+                      value={targetDinerId || ''}
+                      onChange={(e) => setTargetDinerId(e.target.value ? Number(e.target.value) : null)}
+                      className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-zinc-200"
+                    >
+                      <option value="">👤 Mi perfil personal principal</option>
+                      {dinersList.map(d => (
+                        <option key={d.id} value={d.id}>
+                          👥 {d.name} {d.dietary_goal ? `(${d.dietary_goal})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[10px] text-slate-500 dark:text-zinc-400 block mt-1">
+                      Se actualizarán sus calorías diarias y notas con las pautas de la consulta.
+                    </span>
+                  </div>
+
+                  {/* Servings for Household */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 flex items-center gap-1.5 mb-1.5">
+                      <Users className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Raciones a cocinar en el hogar</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={householdServings}
+                        onChange={(e) => setHouseholdServings(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-800 dark:text-zinc-200"
+                      >
+                        <option value="1">1 Ración (Solo para el paciente)</option>
+                        <option value="2">2 Raciones (Paciente + Pareja / Conviviente) ⭐</option>
+                        <option value="3">3 Raciones (3 personas en casa)</option>
+                        <option value="4">4 Raciones (Familia estándar)</option>
+                        <option value="5">5 Raciones</option>
+                        <option value="6">6 Raciones</option>
+                      </select>
+                    </div>
+                    <span className="text-[10px] text-slate-500 dark:text-zinc-400 block mt-1 leading-snug">
+                      La dieta prescribe para 1 persona. Al elegir más raciones, se escalan las cantidades manteniendo el cálculo calórico por persona.
+                    </span>
+                  </div>
                 </div>
 
                 {/* Target Week & Preferences */}
                 <div className="p-4 rounded-2xl bg-slate-100/70 dark:bg-zinc-800/50 border border-slate-200/80 dark:border-zinc-700/60 space-y-3">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-600 dark:text-zinc-300">Semana objetivo:</span>
+                    <span className="font-semibold text-slate-600 dark:text-zinc-300">Semana a planificar:</span>
                     <span className="font-bold text-slate-900 dark:text-white bg-white dark:bg-zinc-900 px-3 py-1 rounded-xl border border-slate-200 dark:border-zinc-700">
                       Semana {weekDays[0].displayDate} al {weekDays[6].displayDate}
                     </span>
@@ -970,7 +1140,7 @@ export const PlannerPage: React.FC = () => {
                         Añadir automáticamente las recetas nuevas a mi recetario
                       </span>
                       <span className="text-[11px] text-slate-500 dark:text-zinc-400 block mt-0.5 leading-relaxed">
-                        Si el plan contiene platos cocinados (guisos, pescados al horno, tortillas, etc.) que no tienes en tu colección, la IA creará su ficha completa con ingredientes y pasos para que puedas volver a cocinarlas cuando quieras.
+                        Si el plan contiene platos cocinados (guisos, pescados, tortillas, verduras al horno), la IA creará su ficha completa con los ingredientes escalados a {householdServings} raciones para que podáis volver a cocinarlos.
                       </span>
                     </div>
                   </label>
@@ -994,12 +1164,12 @@ export const PlannerPage: React.FC = () => {
                     {isScanning ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Analizando con Visión Multimodal...</span>
+                        <span>Extrayendo informe y dieta con Gemini...</span>
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4 fill-zinc-950" />
-                        <span>Analizar Plan con IA</span>
+                        <span>Analizar Informe de Dietista con IA</span>
                       </>
                     )}
                   </button>
@@ -1010,6 +1180,126 @@ export const PlannerPage: React.FC = () => {
             {/* Step 2: Interactive Review */}
             {parsedPlan && !scanSuccessMessage && (
               <div className="space-y-4 py-1 overflow-y-auto flex-1 pr-1">
+                {/* Patient Profile & Dietitian Habits Card */}
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-amber-500/20">
+                    <div className="flex items-center gap-2">
+                      <Target className="w-4 h-4 text-amber-500" />
+                      <span className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                        Perfil & Hábitos Prescritos por la Dietista
+                      </span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-zinc-950">
+                      Detectado por IA
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {/* Patient Name */}
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block mb-1">
+                        Paciente / Comensal
+                      </label>
+                      <input
+                        type="text"
+                        value={patientName}
+                        onChange={(e) => setPatientName(e.target.value)}
+                        placeholder="Nombre del paciente"
+                        className="w-full px-2.5 py-1.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    {/* Target Calories */}
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block mb-1">
+                        Calorías Diarias Objetivo
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <Flame className="w-4 h-4 text-amber-500" />
+                        <input
+                          type="number"
+                          value={patientCalories}
+                          onChange={(e) => setPatientCalories(e.target.value ? Number(e.target.value) : '')}
+                          placeholder="ej. 1600"
+                          className="w-full px-2.5 py-1.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white text-center"
+                        />
+                        <span className="text-xs text-slate-500 font-semibold">kcal/día</span>
+                      </div>
+                    </div>
+
+                    {/* Dietary Goal */}
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block mb-1">
+                        Objetivo Clínico
+                      </label>
+                      <select
+                        value={patientGoal}
+                        onChange={(e) => setPatientGoal(e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white"
+                      >
+                        <option value="deficit">Déficit (Pérdida de peso/grasa)</option>
+                        <option value="mantenimiento">Mantenimiento saludable</option>
+                        <option value="superavit">Superávit (Ganancia muscular)</option>
+                        <option value="saludable">Saludable / Equilibrada</option>
+                        <option value="antiinflamatorio">Pauta Antiinflamatoria</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Habits & Guidelines */}
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider block mb-1">
+                      Pautas generales de hidratación, hábitos y estilo de vida
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={patientHabits}
+                      onChange={(e) => setPatientHabits(e.target.value)}
+                      placeholder="Pautas prescritas: 2L agua, evitar procesados, cocciones al vapor..."
+                      className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs text-slate-800 dark:text-zinc-200 resize-none"
+                    />
+                  </div>
+
+                  {/* Dietary Guidelines Chips if extracted */}
+                  {parsedPlan.dietary_guidelines && parsedPlan.dietary_guidelines.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {parsedPlan.dietary_guidelines.map((g: string, idx: number) => (
+                        <span key={idx} className="px-2.5 py-0.5 rounded-lg text-[10px] font-semibold bg-white dark:bg-zinc-900 border border-amber-500/20 text-slate-700 dark:text-zinc-300 flex items-center gap-1">
+                          ✓ {g}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Update Diner Profile Toggle & Servings Selection */}
+                  <div className="pt-2 border-t border-amber-500/15 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer font-semibold text-slate-800 dark:text-zinc-200">
+                      <input
+                        type="checkbox"
+                        checked={updateDinerProfile}
+                        onChange={(e) => setUpdateDinerProfile(e.target.checked)}
+                        className="w-4 h-4 text-amber-500 rounded border-slate-300 dark:border-zinc-700 focus:ring-amber-500 accent-amber-500"
+                      />
+                      <span>Actualizar mi perfil nutricional con estas pautas y calorías</span>
+                    </label>
+
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-600 dark:text-zinc-400">Raciones para cocinar:</span>
+                      <select
+                        value={householdServings}
+                        onChange={(e) => setHouseholdServings(Number(e.target.value))}
+                        className="px-2.5 py-1 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white"
+                      >
+                        <option value="1">1 Ración</option>
+                        <option value="2">2 Raciones (Pareja / Conviviente) ⭐</option>
+                        <option value="3">3 Raciones</option>
+                        <option value="4">4 Raciones (Familia)</option>
+                        <option value="6">6 Raciones</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Plan Title & Notes Header */}
                 <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-2">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1094,12 +1384,12 @@ export const PlannerPage: React.FC = () => {
                                   ✓ En recetario
                                 </span>
                               ) : meal.is_recipe ? (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 whitespace-nowrap" title="Se creará la receta completa en tu recetario">
-                                  ✨ Nueva receta
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 whitespace-nowrap" title={`Se creará receta adaptada para ${householdServings} raciones`}>
+                                  ✨ Nueva ({householdServings} rac.)
                                 </span>
                               ) : (
                                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 whitespace-nowrap">
-                                  ⚡ Snack / Alimento
+                                  ⚡ Alimento directo
                                 </span>
                               )}
 
@@ -1141,7 +1431,7 @@ export const PlannerPage: React.FC = () => {
                       onChange={(e) => setCreateMissingRecipes(e.target.checked)}
                       className="w-4 h-4 text-amber-500 rounded border-slate-300 dark:border-zinc-700 focus:ring-amber-500 accent-amber-500"
                     />
-                    <span>Guardar nuevas recetas en el recetario</span>
+                    <span>Guardar nuevas recetas en el recetario ({householdServings} raciones)</span>
                   </label>
 
                   <div className="flex items-center gap-2 justify-end">
@@ -1150,7 +1440,7 @@ export const PlannerPage: React.FC = () => {
                       onClick={() => setParsedPlan(null)}
                       className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
                     >
-                      ← Subir otra foto
+                      ← Subir otro informe
                     </button>
                     <button
                       type="button"
@@ -1161,12 +1451,12 @@ export const PlannerPage: React.FC = () => {
                       {isApplyingPlan ? (
                         <>
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Aplicando y creando recetas...</span>
+                          <span>Aplicando plan y escalando recetas...</span>
                         </>
                       ) : (
                         <>
                           <Check className="w-4 h-4 stroke-[3]" />
-                          <span>Confirmar y Aplicar a mi Menú Semanal</span>
+                          <span>Confirmar y Aplicar al Planificador</span>
                         </>
                       )}
                     </button>

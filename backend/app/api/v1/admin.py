@@ -21,6 +21,7 @@ from app.services.storage_guard import storage_guard
 from app.services.backup_service import backup_service
 from app.services.gemini_service import gemini_service
 from app.services.drive_service import drive_service
+from app.services.google_auth_service import google_auth_service
 from app.services.notification_service import notification_service
 from app.config import settings
 
@@ -290,8 +291,16 @@ def get_all_connectors(
         "client_secret": settings.GOOGLE_DRIVE_CLIENT_SECRET or "",
         "redirect_uri": settings.GOOGLE_DRIVE_REDIRECT_URI
     })
-    drive_data["is_configured"] = bool(drive_data.get("client_id") and drive_data.get("client_secret"))
-    drive_data["status"] = "Configurado para OAuth" if drive_data["is_configured"] else "Pendiente de credenciales Google Cloud"
+    drive_srv = drive_service.load_from_db(db)
+    drive_data["is_configured"] = drive_srv.is_configured
+    drive_data["is_authorized"] = drive_srv.is_authorized
+    drive_data["account_email"] = drive_srv.account_email
+    drive_data["status"] = (
+        f"Vinculado con {drive_srv.account_email}" if (drive_srv.is_authorized and drive_srv.account_email)
+        else ("Vinculado a Google Drive" if drive_srv.is_authorized
+        else ("Configurado (pendiente de vincular cuenta)" if drive_srv.is_configured
+        else "Pendiente de credenciales Google Cloud"))
+    )
 
     synology_data = get_setting("connector_synology", {
         "host": settings.SYNOLOGY_HOST or "192.168.1.8",
@@ -331,9 +340,26 @@ def get_all_connectors(
         "storage_threshold_gb": settings.DISK_MIN_FREE_GB
     })
 
+    google_default_client_id = settings.GOOGLE_AUTH_CLIENT_ID or drive_data.get("client_id") or ""
+    google_default_client_secret = settings.GOOGLE_AUTH_CLIENT_SECRET or drive_data.get("client_secret") or ""
+    google_auth_data = get_setting("connector_google_auth", {
+        "is_active": bool(google_default_client_id and google_default_client_secret),
+        "client_id": google_default_client_id,
+        "client_secret": google_default_client_secret,
+        "redirect_uri": settings.GOOGLE_AUTH_REDIRECT_URI or "https://recetas.danesti.es/api/auth/google/callback",
+        "auto_register": True,
+        "allowed_domains": ""
+    })
+    google_auth_data["is_configured"] = bool(google_auth_data.get("client_id") and google_auth_data.get("client_secret"))
+    google_auth_data["status"] = (
+        "Activo y listo para iniciar sesión" if (google_auth_data.get("is_active") and google_auth_data["is_configured"])
+        else ("Configurado pero inactivo" if google_auth_data["is_configured"] else "Pendiente de credenciales Google Cloud")
+    )
+
     return {
         "gemini": gemini_data,
         "drive": drive_data,
+        "google_auth": google_auth_data,
         "synology": synology_data,
         "telegram": telegram_data,
         "smtp": smtp_data,
@@ -348,7 +374,7 @@ def update_connector_config(
     admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
-    valid_providers = ["gemini", "drive", "synology", "telegram", "smtp", "notification_rules"]
+    valid_providers = ["gemini", "drive", "google_auth", "synology", "telegram", "smtp", "notification_rules"]
     if provider not in valid_providers:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Proveedor desconocido: {provider}")
 
@@ -375,6 +401,15 @@ def update_connector_config(
             client_id=payload.get("client_id"),
             client_secret=payload.get("client_secret"),
             redirect_uri=payload.get("redirect_uri")
+        )
+    elif provider == "google_auth":
+        google_auth_service.update_credentials(
+            is_active=payload.get("is_active"),
+            client_id=payload.get("client_id"),
+            client_secret=payload.get("client_secret"),
+            redirect_uri=payload.get("redirect_uri"),
+            auto_register=payload.get("auto_register"),
+            allowed_domains=payload.get("allowed_domains")
         )
     elif provider == "synology":
         settings.SYNOLOGY_HOST = payload.get("host", settings.SYNOLOGY_HOST)
@@ -610,11 +645,34 @@ def test_drive_connector(
     if not client_id or not client_secret:
         return {"success": False, "error": "Falta configurar Client ID y Client Secret de Google Cloud Console."}
 
-    auth_url = drive_service.get_auth_url()
+    drive_srv = drive_service.load_from_db(db)
+    drive_srv.update_credentials(client_id, client_secret, redirect_uri)
+    auth_url = drive_srv.get_auth_url(redirect_uri=redirect_uri)
+    msg = (
+        f"Google Drive vinculado correctamente con {drive_srv.account_email}." if drive_srv.is_authorized
+        else "Credenciales correctas. Pulsa 'Vincular Google Drive' para autorizar el acceso."
+    )
     return {
         "success": True,
-        "message": "Credenciales de Google Drive configuradas correctamente.",
+        "message": msg,
+        "is_authorized": drive_srv.is_authorized,
         "auth_url": auth_url
     }
+
+
+@router.post("/connectors/google_auth/test")
+def test_google_auth_connector(
+    payload: Dict[str, Any] = {},
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    service = google_auth_service.load_from_db(db)
+    client_id = payload.get("client_id") or service.client_id
+    client_secret = payload.get("client_secret") or service.client_secret
+    service.update_credentials(client_id=client_id, client_secret=client_secret)
+    res = service.test_connection()
+    if not res.get("success"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=res.get("message"))
+    return res
 
 

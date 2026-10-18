@@ -97,6 +97,7 @@ class RecipeBase(BaseModel):
     original_author: Optional[str] = None
     source_type: str = "manual"
     source_url: Optional[str] = None
+    is_private: bool = False
 
 
 class RecipeCreate(RecipeBase):
@@ -125,6 +126,14 @@ class RecipeUpdate(BaseModel):
     leftover_tips: Optional[str] = None
     chef_notes: Optional[str] = None
     allergens: Optional[List[str]] = None
+    source_url: Optional[str] = None
+    source_type: Optional[str] = None
+    is_private: Optional[bool] = None
+    nutrition_calories: Optional[float] = None
+    nutrition_protein: Optional[float] = None
+    nutrition_carbs: Optional[float] = None
+    nutrition_fat: Optional[float] = None
+    variants: Optional[List[RecipeVariantCreate]] = None
     change_summary: Optional[str] = None
 
 
@@ -169,6 +178,7 @@ class RecipeResponse(RecipeBase):
     ratings: List[RecipeRatingResponse] = []
     average_rating: Optional[float] = None
     is_favorite: bool = False
+    is_owner: bool = False
     personal_notes: Optional[str] = None
 
     class Config:

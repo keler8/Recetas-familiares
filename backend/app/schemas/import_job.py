@@ -10,8 +10,13 @@ class RecipeDraftResponse(BaseModel):
     extracted_json: Dict[str, Any]
     source_image_url: Optional[str] = None
     proposed_image_url: Optional[str] = None
+    source_url: Optional[str] = None
     status: str
     duplicate_recipe_id: Optional[int] = None
+    existing_recipe_id: Optional[int] = None
+    existing_recipe_title: Optional[str] = None
+    has_changes: Optional[bool] = None
+    duplicate_reason: Optional[str] = None
     ai_confidence: float
     uncertainty_notes: Optional[str] = None
     created_at: datetime
@@ -24,6 +29,7 @@ class ImportBatchResponse(BaseModel):
     id: int
     source_type: str
     source_name: Optional[str] = None
+    source_url: Optional[str] = None
     status: str
     total_detected: int
     approved_count: int
@@ -39,8 +45,16 @@ class ImportBatchResponse(BaseModel):
 
 
 class DraftReviewAction(BaseModel):
-    action: str  # 'approve', 'discard', 'modify_and_approve'
+    action: str  # 'approve', 'update_existing', 'discard', 'modify_and_approve'
+    target_recipe_id: Optional[int] = None
     modified_data: Optional[Dict[str, Any]] = None
+
+
+class DraftUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    proposed_image_url: Optional[str] = None
+    source_url: Optional[str] = None
+    extracted_json: Optional[Dict[str, Any]] = None
 
 
 class InstagramImportRequest(BaseModel):

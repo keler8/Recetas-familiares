@@ -206,14 +206,14 @@ export const HomePage: React.FC = () => {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowConfigModal(true)}
+        <Link
+          to="/profile?tab=preferences#homepage"
           className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-white dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:text-slate-900 dark:hover:text-white border border-slate-200 dark:border-zinc-700 text-xs font-semibold transition-all self-start sm:self-auto shadow-sm hover:shadow"
+          title="Configurar la pantalla de inicio en Ajustes de Usuario"
         >
           <SlidersHorizontal className="w-3.5 h-3.5 text-amber-500" />
           <span>Personalizar Inicio</span>
-        </button>
+        </Link>
       </div>
 
       {/* Widget 1: Tips de mi Alimentación & Asistente Dietético */}
@@ -390,6 +390,7 @@ export const HomePage: React.FC = () => {
                     <img
                       src={recipe.main_image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80'}
                       alt={recipe.title}
+                      referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     />
                   </Link>
@@ -417,13 +418,21 @@ export const HomePage: React.FC = () => {
                     <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white line-clamp-1 group-hover:text-amber-500 transition-colors">
                       {recipe.title}
                     </h3>
-                    <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-zinc-400 mt-1">
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-zinc-400 mt-1 flex-wrap">
                       <span className="flex items-center gap-1">
                         <Clock className="w-3 h-3 text-amber-500" />
                         {recipe.total_time_min || 30}m
                       </span>
                       <span>·</span>
                       <span>{recipe.difficulty || 'Media'}</span>
+                      {recipe.nutrition_calories && (
+                        <>
+                          <span>·</span>
+                          <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                            🔥 {Math.round(recipe.nutrition_calories)} kcal
+                          </span>
+                        </>
+                      )}
                     </div>
                   </Link>
 
@@ -475,6 +484,7 @@ export const HomePage: React.FC = () => {
                       <img
                         src={recipe.main_image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80'}
                         alt={recipe.title}
+                        referrerPolicy="no-referrer"
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       />
                     </Link>
@@ -494,13 +504,21 @@ export const HomePage: React.FC = () => {
                       <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white line-clamp-1 group-hover:text-rose-500 transition-colors">
                         {recipe.title}
                       </h3>
-                      <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-zinc-400 mt-1">
+                      <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-zinc-400 mt-1 flex-wrap">
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3 text-amber-500" />
                           {recipe.total_time_min || 30}m
                         </span>
                         <span>·</span>
                         <span>{recipe.difficulty || 'Fácil'}</span>
+                        {recipe.nutrition_calories && (
+                          <>
+                            <span>·</span>
+                            <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                              🔥 {Math.round(recipe.nutrition_calories)} kcal
+                            </span>
+                          </>
+                        )}
                       </div>
                     </Link>
                   </div>
@@ -659,7 +677,15 @@ export const HomePage: React.FC = () => {
               ))}
             </div>
 
-            <div className="pt-2 flex justify-end">
+            <div className="pt-2 flex items-center justify-between gap-3">
+              <Link
+                to="/profile?tab=preferences#homepage"
+                onClick={() => setShowConfigModal(false)}
+                className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-1"
+              >
+                <span>Abrir en Ajustes de Usuario</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
               <button
                 type="button"
                 onClick={() => setShowConfigModal(false)}
