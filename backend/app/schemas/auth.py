@@ -43,9 +43,16 @@ class UserCreate(UserBase):
 
 class UserUpdate(BaseModel):
     email: Optional[str] = None
+    username: Optional[str] = None
     full_name: Optional[str] = None
+    role: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
+    reset_mfa: Optional[bool] = None
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str
 
 
 class ChangePasswordRequest(BaseModel):

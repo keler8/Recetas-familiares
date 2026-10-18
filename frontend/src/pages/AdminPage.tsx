@@ -5,16 +5,19 @@ import {
   Sparkles, RefreshCw, HardDriveDownload, Database, Activity,
   Plus, Trash2, Edit2, Check, ExternalLink, Eye, EyeOff,
   Send, Server, Clock, Utensils, Tag, Heart, Shield,
-  CheckCheck, AlertTriangle, Save, UserCheck, X, HelpCircle, Folder
+  CheckCheck, AlertTriangle, Save, UserCheck, X, HelpCircle, Folder,
+  Key, Lock, RotateCcw
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useHousehold } from '../context/HouseholdContext';
+import { useAuth } from '../context/AuthContext';
 import { ConnectorInfoModal, ConnectorType } from '../components/ConnectorInfoModal';
 
 type SettingsTab = 'general' | 'users_access' | 'home_recipes' | 'mail_notifications' | 'connectors_ai';
 
 export const AdminPage: React.FC = () => {
   const { activeHousehold } = useHousehold();
+  const { user: currentUser } = useAuth();
   const [searchParams] = useSearchParams();
   
   const getTabFromParam = (tabParam: string | null): SettingsTab => {
@@ -87,12 +90,26 @@ export const AdminPage: React.FC = () => {
   const [newTagLabel, setNewTagLabel] = useState('');
   const [infoConnector, setInfoConnector] = useState<ConnectorType | null>(null);
 
-  // Modals: Add User & Add Diner
+  // Modals: Add User, Edit User, Reset Password & Add Diner
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [newUserName, setNewUserName] = useState('');
   const [newUserPass, setNewUserPass] = useState('');
   const [newUserRole, setNewUserRole] = useState('family');
+
+  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<any | null>(null);
+  const [editUserEmail, setEditUserEmail] = useState('');
+  const [editUserName, setEditUserName] = useState('');
+  const [editUserFullName, setEditUserFullName] = useState('');
+  const [editUserRole, setEditUserRole] = useState('family');
+  const [editUserActive, setEditUserActive] = useState(true);
+  const [editUserResetMfa, setEditUserResetMfa] = useState(false);
+
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordTargetUser, setPasswordTargetUser] = useState<any | null>(null);
+  const [newPasswordVal, setNewPasswordVal] = useState('');
+  const [showNewPasswordPlain, setShowNewPasswordPlain] = useState(false);
 
   const [showAddDinerModal, setShowAddDinerModal] = useState(false);
   const [dinerName, setDinerName] = useState('');
@@ -233,6 +250,105 @@ export const AdminPage: React.FC = () => {
       await fetchAdminData();
     } catch (err: any) {
       alert(`Error al crear usuario: ${err.message || err}`);
+    }
+  };
+
+  const generateRandomPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%&*';
+    let pass = '';
+    for (let i = 0; i < 12; i++) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setNewPasswordVal(pass);
+    setShowNewPasswordPlain(true);
+  };
+
+  const handleOpenEditUser = (user: any) => {
+    setEditingUser(user);
+    setEditUserEmail(user.email || '');
+    setEditUserName(user.username || '');
+    setEditUserFullName(user.full_name || '');
+    setEditUserRole(user.role || 'family');
+    setEditUserActive(user.is_active ?? true);
+    setEditUserResetMfa(false);
+    setShowEditUserModal(true);
+  };
+
+  const handleSaveEditUser = async () => {
+    if (!editingUser) return;
+    if (!editUserEmail.trim() || !editUserName.trim()) {
+      alert('Email y nombre de usuario son obligatorios');
+      return;
+    }
+    try {
+      await apiRequest(`/admin/users/${editingUser.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          email: editUserEmail.trim(),
+          username: editUserName.trim(),
+          full_name: editUserFullName.trim(),
+          role: editUserRole,
+          is_active: editUserActive,
+          reset_mfa: editUserResetMfa
+        })
+      });
+      alert('Usuario actualizado correctamente');
+      setShowEditUserModal(false);
+      setEditingUser(null);
+      await fetchAdminData();
+    } catch (err: any) {
+      alert(`Error al actualizar usuario: ${err.message || err}`);
+    }
+  };
+
+  const handleOpenResetPassword = (user: any) => {
+    setPasswordTargetUser(user);
+    setNewPasswordVal('');
+    setShowNewPasswordPlain(false);
+    setShowPasswordModal(true);
+  };
+
+  const handleSaveNewPassword = async () => {
+    if (!passwordTargetUser) return;
+    if (!newPasswordVal.trim() || newPasswordVal.trim().length < 6) {
+      alert('La contraseña debe tener al menos 6 caracteres');
+      return;
+    }
+    try {
+      await apiRequest(`/admin/users/${passwordTargetUser.id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({
+          new_password: newPasswordVal.trim()
+        })
+      });
+      alert(`Contraseña actualizada con éxito para el usuario @${passwordTargetUser.username}`);
+      setShowPasswordModal(false);
+      setPasswordTargetUser(null);
+      setNewPasswordVal('');
+      await fetchAdminData();
+    } catch (err: any) {
+      alert(`Error al cambiar la contraseña: ${err.message || err}`);
+    }
+  };
+
+  const handleDeleteUser = async (user: any) => {
+    if (user.id === currentUser?.id) {
+      alert('No puedes eliminar tu propia cuenta de administrador.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `¿Estás seguro de que deseas eliminar permanentemente al usuario "${user.username}" (${user.email})?\n\nEsta acción revocará sus sesiones y eliminará su cuenta.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await apiRequest(`/admin/users/${user.id}`, {
+        method: 'DELETE'
+      });
+      alert(`Usuario @${user.username} eliminado correctamente.`);
+      await fetchAdminData();
+    } catch (err: any) {
+      alert(`Error al eliminar usuario: ${err.message || err}`);
     }
   };
 
@@ -653,24 +769,90 @@ export const AdminPage: React.FC = () => {
             </div>
 
             <div className="divide-y divide-slate-100 dark:divide-zinc-800/80 bg-slate-50 dark:bg-zinc-950 rounded-2xl border border-slate-200 dark:border-zinc-800 overflow-hidden">
-              {usersList.map(u => (
-                <div key={u.id} className="p-4 flex items-center justify-between text-xs">
-                  <div>
-                    <span className="font-bold text-slate-900 dark:text-white text-sm">{u.full_name || u.username}</span>
-                    <span className="text-slate-500 dark:text-zinc-400 ml-2 font-mono">({u.email})</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold capitalize ${
-                      u.role === 'admin'
-                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
-                        : 'bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
-                    }`}>
-                      {u.role === 'admin' ? 'Administrador' : 'Familiar'}
-                    </span>
-                    <span className="text-[10px] text-slate-500 dark:text-zinc-400 font-medium">{u.mfa_enabled ? '2FA Activo' : 'Sin 2FA'}</span>
-                  </div>
+              {usersList.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-500 dark:text-zinc-400">
+                  No hay usuarios registrados en el sistema.
                 </div>
-              ))}
+              ) : (
+                usersList.map(u => (
+                  <div key={u.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs transition-colors hover:bg-slate-100/50 dark:hover:bg-zinc-900/50">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-2xl bg-sky-100 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold flex items-center justify-center shrink-0 uppercase text-sm border border-sky-200 dark:border-sky-800/40">
+                        {(u.full_name || u.username || 'U').slice(0, 2)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900 dark:text-white text-sm truncate">
+                            {u.full_name || u.username}
+                          </span>
+                          <span className="text-slate-400 dark:text-zinc-500 font-mono text-[11px]">
+                            @{u.username}
+                          </span>
+                          {currentUser?.id === u.id && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
+                              Tú
+                            </span>
+                          )}
+                          {!u.is_active && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
+                              Inactivo
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5 text-slate-500 dark:text-zinc-400">
+                          <span className="truncate">{u.email}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end md:self-auto flex-wrap">
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold capitalize ${
+                        u.role === 'admin'
+                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                          : 'bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300'
+                      }`}>
+                        {u.role === 'admin' ? 'Administrador' : 'Familiar'}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                        u.mfa_enabled 
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
+                          : 'bg-slate-200/60 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400'
+                      }`}>
+                        {u.mfa_enabled ? '2FA Activo' : 'Sin 2FA'}
+                      </span>
+
+                      <div className="flex items-center gap-1 ml-2 border-l border-slate-200 dark:border-zinc-800 pl-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditUser(u)}
+                          title="Modificar datos del usuario"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-sky-600 hover:bg-sky-50 dark:hover:bg-sky-950/40 transition-colors"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenResetPassword(u)}
+                          title="Asignar o restablecer contraseña"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors"
+                        >
+                          <Key className="w-4 h-4" />
+                        </button>
+                        {currentUser?.id !== u.id && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUser(u)}
+                            title="Eliminar usuario"
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -1699,6 +1881,192 @@ export const AdminPage: React.FC = () => {
                 className="px-4 py-1.5 rounded-xl text-xs font-bold bg-sky-600 text-white"
               >
                 Crear Usuario
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal */}
+      {showEditUserModal && editingUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-sky-500" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Modificar Usuario</h3>
+              </div>
+              <button
+                onClick={() => setShowEditUserModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Nombre Completo</label>
+                <input
+                  type="text"
+                  value={editUserFullName}
+                  onChange={(e) => setEditUserFullName(e.target.value)}
+                  placeholder="Ej: Daniel Gómez"
+                  className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Nombre de Usuario *</label>
+                  <input
+                    type="text"
+                    value={editUserName}
+                    onChange={(e) => setEditUserName(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-sky-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Rol</label>
+                  <select
+                    value={editUserRole}
+                    onChange={(e) => setEditUserRole(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="family">Familiar</option>
+                    <option value="admin">Administrador</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Correo Electrónico *</label>
+                <input
+                  type="email"
+                  value={editUserEmail}
+                  onChange={(e) => setEditUserEmail(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/80 space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editUserActive}
+                    onChange={(e) => setEditUserActive(e.target.checked)}
+                    disabled={currentUser?.id === editingUser.id}
+                    className="rounded border-slate-300 dark:border-zinc-700 text-sky-600 focus:ring-sky-500"
+                  />
+                  <span className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                    Cuenta activa (permite iniciar sesión)
+                  </span>
+                </label>
+
+                {editingUser.mfa_enabled && (
+                  <label className="flex items-start gap-2 cursor-pointer p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                    <input
+                      type="checkbox"
+                      checked={editUserResetMfa}
+                      onChange={(e) => setEditUserResetMfa(e.target.checked)}
+                      className="mt-0.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500"
+                    />
+                    <div className="text-xs text-amber-800 dark:text-amber-300">
+                      <span className="font-bold">Restablecer 2FA:</span> eliminar el factor TOTP actual (útil si el usuario perdió su app de autenticación).
+                    </div>
+                  </label>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setShowEditUserModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEditUser}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-sky-600 hover:bg-sky-500 text-white shadow-md shadow-sky-600/20 transition-all flex items-center gap-1.5"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Guardar Cambios</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Set/Reset Password Modal */}
+      {showPasswordModal && passwordTargetUser && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <Key className="w-4 h-4 text-amber-500" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Asignar Contraseña</h3>
+              </div>
+              <button
+                onClick={() => setShowPasswordModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
+              Establece una nueva contraseña para <span className="font-bold text-slate-900 dark:text-white">@{passwordTargetUser.username}</span>. Sus sesiones activas se cerrarán automáticamente.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Nueva Contraseña</label>
+                <div className="relative mt-1">
+                  <input
+                    type={showNewPasswordPlain ? 'text' : 'password'}
+                    value={newPasswordVal}
+                    onChange={(e) => setNewPasswordVal(e.target.value)}
+                    placeholder="Mínimo 6 caracteres"
+                    className="w-full pr-10 pl-3 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white font-mono focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPasswordPlain(!showNewPasswordPlain)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300"
+                  >
+                    {showNewPasswordPlain ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={generateRandomPassword}
+                className="w-full py-2 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 hover:border-amber-500/50 hover:bg-amber-500/5 text-amber-600 dark:text-amber-400 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Generar Contraseña Segura</span>
+              </button>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setShowPasswordModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveNewPassword}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-md shadow-amber-500/20 transition-all flex items-center gap-1.5"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>Aplicar Contraseña</span>
               </button>
             </div>
           </div>

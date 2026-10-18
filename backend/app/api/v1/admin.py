@@ -9,12 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.database import get_db
-from app.models.auth import User, AuditLog, Invitation
+from app.models.auth import User, AuditLog, Invitation, UserSession
 from app.models.household import Household
 from app.models.recipe import Recipe
 from app.models.import_job import ImportBatch
 from app.models.system import SystemSetting
-from app.schemas.auth import UserCreate, UserResponse, UserUpdate
+from app.schemas.auth import UserCreate, UserResponse, UserUpdate, AdminResetPasswordRequest
 from app.api.deps import get_current_admin
 from app.services.auth_service import auth_service
 from app.services.storage_guard import storage_guard
@@ -181,18 +181,106 @@ def update_user_status(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
 
-    if u_up.is_active is not None:
-        user.is_active = u_up.is_active
+    if u_up.username is not None and u_up.username.strip() != user.username:
+        new_uname = u_up.username.strip()
+        existing = db.query(User).filter(User.username.ilike(new_uname), User.id != user.id).first()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El nombre de usuario ya está en uso")
+        user.username = new_uname
+
+    if u_up.email is not None and u_up.email.strip().lower() != user.email.lower():
+        new_email = u_up.email.strip().lower()
+        existing = db.query(User).filter(User.email.ilike(new_email), User.id != user.id).first()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El correo electrónico ya está registrado")
+        user.email = new_email
+
     if u_up.full_name is not None:
-        user.full_name = u_up.full_name
-    if u_up.email is not None:
-        user.email = u_up.email
+        user.full_name = u_up.full_name.strip() or None
+
+    if u_up.role is not None and u_up.role in ["admin", "family"]:
+        if user.role == "admin" and u_up.role != "admin":
+            admin_count = db.query(User).filter(User.role == "admin", User.is_active == True).count()
+            if admin_count <= 1:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se puede cambiar el rol al único administrador activo del sistema")
+        user.role = u_up.role
+
+    if u_up.is_active is not None:
+        if user.id == admin.id and not u_up.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No puedes desactivar tu propia cuenta de administrador")
+        if user.role == "admin" and not u_up.is_active:
+            admin_count = db.query(User).filter(User.role == "admin", User.is_active == True).count()
+            if admin_count <= 1:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se puede desactivar al único administrador activo del sistema")
+        user.is_active = u_up.is_active
+
     if u_up.password:
-        user.hashed_password = auth_service.get_password_hash(u_up.password)
+        if len(u_up.password.strip()) < 6:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña debe tener al menos 6 caracteres")
+        user.hashed_password = auth_service.get_password_hash(u_up.password.strip())
+
+    if u_up.reset_mfa:
+        user.mfa_enabled = False
+        user.mfa_secret = None
+        user.mfa_recovery_codes = None
 
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: int,
+    req: AdminResetPasswordRequest,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+
+    if not req.new_password or len(req.new_password.strip()) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña debe tener al menos 6 caracteres")
+
+    user.hashed_password = auth_service.get_password_hash(req.new_password.strip())
+    # Revocar sesiones activas del usuario para exigir nuevo inicio de sesión
+    db.query(UserSession).filter(UserSession.user_id == user.id).update({"is_revoked": True})
+    db.commit()
+    return {"success": True, "message": f"Contraseña actualizada para el usuario {user.username}"}
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    if user_id == admin.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No puedes eliminar tu propia cuenta de administrador")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
+
+    if user.role == "admin":
+        admin_count = db.query(User).filter(User.role == "admin").count()
+        if admin_count <= 1:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se puede eliminar al único administrador del sistema")
+
+    # Transferir hogares compartidos creados por este usuario al administrador que ejecuta la acción
+    shared_households = db.query(Household).filter(Household.owner_id == user.id, Household.is_personal == False).all()
+    for sh in shared_households:
+        sh.owner_id = admin.id
+
+    # Eliminar hogares personales del usuario
+    personal_households = db.query(Household).filter(Household.owner_id == user.id, Household.is_personal == True).all()
+    for ph in personal_households:
+        db.delete(ph)
+
+    db.delete(user)
+    db.commit()
+    return {"success": True, "message": f"Usuario {user.username} eliminado correctamente"}
 
 
 # Backups
