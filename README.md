@@ -13,7 +13,7 @@ Aplicación web progresiva (PWA) de producción para la gestión inteligente de 
 ### Credenciales iniciales del Administrador:
 - **Email:** `admin@recetas.local`
 - **Usuario:** `admin`
-- **Contraseña:** `AdminRecetas_2026!`
+- **Contraseña:** *(Definida de forma segura en la variable `INITIAL_ADMIN_PASSWORD` del archivo `.env`)*
 - **Doble Factor (TOTP):** En el primer inicio de sesión se requerirá configurar la autenticación de doble factor mediante la app de autenticación (Google Authenticator, Bitwarden, etc.) escaneando el código QR en pantalla. Se proporcionan códigos de recuperación uniuso.
 
 ---
