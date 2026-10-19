@@ -934,21 +934,40 @@ def apply_imported_nutrition_plan(
                 if clean_title in created_recipes_cache:
                     final_recipe_id = created_recipes_cache[clean_title]
                 else:
+                    dish_type = "Plato Principal" if m.meal_type in ["comida", "cena"] else "Desayuno / Snack"
+                    # Search image matching recipe title with AI
+                    img_url = gemini_service.generate_or_find_recipe_image(clean_title, dish_type)
+
+                    # AI review: tips and nutrition estimation
+                    ing_names = [ing.name for ing in m.ingredients]
+                    tips = gemini_service.suggest_recipe_tips(clean_title, ing_names, dish_type)
+                    ing_lines = [f"{ing.amount or ''} {ing.unit or ''} {ing.name}".strip() for ing in m.ingredients]
+                    nut = gemini_service.estimate_recipe_nutrition(clean_title, ing_lines, base_servings=household_servings, dish_type=dish_type)
+
                     new_rec = Recipe(
                         title=clean_title,
                         description=m.description or f"Receta importada del plan nutricional ({m.meal_type}) adaptada para {household_servings} raciones.",
+                        main_image_url=img_url,
                         prep_time_min=10,
                         cook_time_min=20,
                         total_time_min=30,
                         difficulty="facil",
                         base_servings=household_servings,
-                        nutrition_calories=m.calories,
+                        nutrition_calories=m.calories or (nut.get("calories") if nut else None),
+                        nutrition_protein=nut.get("protein") if nut else None,
+                        nutrition_carbs=nut.get("carbs") if nut else None,
+                        nutrition_fat=nut.get("fat") if nut else None,
+                        chef_notes=tips.get("chef_notes"),
+                        preservation_tips=tips.get("preservation_tips"),
+                        freezing_tips=tips.get("freezing_tips"),
+                        reheating_tips=tips.get("reheating_tips"),
                         categories=json.dumps(["Comidas", "Plan Nutricional"], ensure_ascii=False),
                         tags=json.dumps(["saludable", "plan_nutricional", "dietista", "importado_ia"], ensure_ascii=False),
-                        dish_type="Plato Principal" if m.meal_type in ["comida", "cena"] else "Desayuno / Snack",
+                        dish_type=dish_type,
                         meal_type="desayuno" if m.meal_type == "desayuno" else ("comida_cena" if m.meal_type in ["comida", "cena"] else "almuerzo_merienda"),
                         source_type="plan_nutricional_ia",
                         review_status="approved",
+                        is_private=True,
                         created_by_id=current_user.id
                     )
                     db.add(new_rec)

@@ -288,14 +288,14 @@ def _format_report_response(report: DietitianReport, db: Session) -> Dict[str, A
             recipes_list.append({
                 "id": r.id,
                 "title": r.title,
-                "image_url": r.image_url,
+                "image_url": r.main_image_url or getattr(r, "image_url", None),
                 "prep_time_min": r.prep_time_min,
                 "cook_time_min": r.cook_time_min,
                 "nutrition_calories": r.nutrition_calories,
                 "difficulty": r.difficulty,
                 "dish_type": r.dish_type,
                 "categories": cats,
-                "is_private": r.is_private
+                "is_private": bool(r.is_private)
             })
 
     return {
@@ -605,21 +605,48 @@ def update_report_version(
                 if title in created_recipes_cache:
                     final_rec_id = created_recipes_cache[title]
                 else:
+                    dish_type = "Plato Principal" if m_dict.get("meal_type") in ["comida", "cena"] else "Desayuno / Snack"
+                    # Search image matching recipe title with AI
+                    img_url = gemini_service.generate_or_find_recipe_image(title, dish_type)
+
+                    # AI review: tips and nutrition estimation
+                    ing_names = []
+                    ing_lines = []
+                    for ing in m_dict.get("ingredients", []):
+                        name = ing.get("name", "") if isinstance(ing, dict) else getattr(ing, "name", "")
+                        amt = ing.get("amount") if isinstance(ing, dict) else getattr(ing, "amount", None)
+                        unit = ing.get("unit") if isinstance(ing, dict) else getattr(ing, "unit", "")
+                        if name:
+                            ing_names.append(name)
+                            ing_lines.append(f"{amt or ''} {unit or ''} {name}".strip())
+
+                    tips = gemini_service.suggest_recipe_tips(title, ing_names, dish_type)
+                    nut = gemini_service.estimate_recipe_nutrition(title, ing_lines, base_servings=servings, dish_type=dish_type)
+
                     new_rec = Recipe(
                         title=title,
                         description=m_dict.get("description") or f"Receta de revisión del plan nutricional ({m_dict.get('meal_type', 'comida')}) adaptada para {servings} raciones.",
+                        main_image_url=img_url,
                         prep_time_min=10,
                         cook_time_min=20,
                         total_time_min=30,
                         difficulty="facil",
                         base_servings=servings,
-                        nutrition_calories=m_dict.get("calories"),
+                        nutrition_calories=m_dict.get("calories") or (nut.get("calories") if nut else None),
+                        nutrition_protein=nut.get("protein") if nut else None,
+                        nutrition_carbs=nut.get("carbs") if nut else None,
+                        nutrition_fat=nut.get("fat") if nut else None,
+                        chef_notes=tips.get("chef_notes"),
+                        preservation_tips=tips.get("preservation_tips"),
+                        freezing_tips=tips.get("freezing_tips"),
+                        reheating_tips=tips.get("reheating_tips"),
                         categories=json.dumps(["Comidas", "Plan Nutricional"], ensure_ascii=False),
                         tags=json.dumps(["saludable", "plan_nutricional", "dietista", "revision_ia"], ensure_ascii=False),
-                        dish_type="Plato Principal" if m_dict.get("meal_type") in ["comida", "cena"] else "Desayuno / Snack",
+                        dish_type=dish_type,
                         meal_type="desayuno" if m_dict.get("meal_type") == "desayuno" else ("comida_cena" if m_dict.get("meal_type") in ["comida", "cena"] else "almuerzo_merienda"),
                         source_type="plan_nutricional_ia",
                         review_status="approved",
+                        is_private=True,
                         created_by_id=current_user.id
                     )
                     db.add(new_rec)

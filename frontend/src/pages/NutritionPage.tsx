@@ -6,7 +6,7 @@ import {
   ArrowRight, CheckCircle2, Sliders, ThumbsUp, ThumbsDown,
   Dumbbell, Target, Calculator, Plus, Trash2, Edit2, X, Activity, FileText,
   Calendar, RotateCw, Lightbulb, BookOpen, ChevronRight, Send, Eye, CheckSquare,
-  UploadCloud, Camera, RefreshCw, PlusCircle, Layers
+  UploadCloud, Camera, RefreshCw, PlusCircle, Layers, Lock, Unlock
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -277,6 +277,67 @@ export const NutritionPage: React.FC = () => {
       alert(err.message || 'Error al aplicar el menú a la semana');
     } finally {
       setIsApplyingToWeek(false);
+    }
+  };
+
+  // Recipe Privacy and AI Review handlers for active report recipes
+  const [reviewingRecipeId, setReviewingRecipeId] = useState<number | null>(null);
+  const [isReviewingAllRecipes, setIsReviewingAllRecipes] = useState<boolean>(false);
+
+  const handleToggleRecipePrivacy = async (recipeId: number) => {
+    try {
+      const updated = await apiRequest(`/recipes/${recipeId}/toggle-privacy`, { method: 'POST' });
+      setActiveReport((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          recipes: (prev.recipes || []).map((r: any) =>
+            r.id === recipeId ? { ...r, is_private: updated.is_private } : r
+          )
+        };
+      });
+    } catch (err: any) {
+      alert(err.message || 'Error al cambiar la privacidad de la receta');
+    }
+  };
+
+  const handleAiReviewRecipe = async (recipeId: number) => {
+    setReviewingRecipeId(recipeId);
+    try {
+      const updated = await apiRequest(`/recipes/${recipeId}/ai-review`, { method: 'POST' });
+      setActiveReport((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          recipes: (prev.recipes || []).map((r: any) =>
+            r.id === recipeId ? {
+              ...r,
+              image_url: updated.main_image_url || r.image_url,
+              nutrition_calories: updated.nutrition_calories || r.nutrition_calories,
+              is_private: updated.is_private
+            } : r
+          )
+        };
+      });
+    } catch (err: any) {
+      alert(err.message || 'Error al revisar la receta con IA');
+    } finally {
+      setReviewingRecipeId(null);
+    }
+  };
+
+  const handleAiReviewAllRecipes = async () => {
+    if (!activeReport?.recipes || activeReport.recipes.length === 0) return;
+    setIsReviewingAllRecipes(true);
+    try {
+      for (const rec of activeReport.recipes) {
+        await apiRequest(`/recipes/${rec.id}/ai-review`, { method: 'POST' });
+      }
+      await fetchActiveReport();
+    } catch (err: any) {
+      alert(err.message || 'Error al revisar las recetas con IA');
+    } finally {
+      setIsReviewingAllRecipes(false);
     }
   };
 
@@ -1020,17 +1081,49 @@ export const NutritionPage: React.FC = () => {
           {/* Subtab 3: Recetas del Informe */}
           {activeReportTab === 'recipes' && (
             <div className="space-y-4 pt-1">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-slate-500 dark:text-zinc-400">
-                  Recetas generadas o vinculadas al importar este informe nutricional.
-                </p>
-                <Link
-                  to="/recipes"
-                  className="text-xs font-bold text-emerald-500 hover:text-emerald-400 flex items-center gap-1"
-                >
-                  <span>Ir al Recetario Completo</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Link>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-xs">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-slate-900 dark:text-white">
+                      Cajón Privado de Recetas de la Dietista
+                    </h4>
+                    <p className="text-[11px] text-slate-600 dark:text-zinc-400 mt-0.5">
+                      Por defecto, todas las recetas de tu informe se guardan de forma <strong>privada</strong> (solo visibles para ti). Puedes pasar cualquiera de ellas al <strong>recetario familiar</strong> manualmente cuando quieras compartirla.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                  <button
+                    type="button"
+                    onClick={handleAiReviewAllRecipes}
+                    disabled={isReviewingAllRecipes || !activeReport.recipes || activeReport.recipes.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-bold text-xs disabled:opacity-50 transition-colors"
+                    title="Vuelve a analizar con IA todas las recetas del informe para buscar imágenes culinarias reales y calcular macronutrientes"
+                  >
+                    {isReviewingAllRecipes ? (
+                      <>
+                        <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Analizando con IA...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Revisar todas con IA y Buscar Fotos</span>
+                      </>
+                    )}
+                  </button>
+                  <Link
+                    to="/recipes"
+                    className="text-xs font-bold text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white flex items-center gap-1"
+                  >
+                    <span>Ver Recetario</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
               </div>
 
               {(!activeReport.recipes || activeReport.recipes.length === 0) ? (
@@ -1045,42 +1138,115 @@ export const NutritionPage: React.FC = () => {
                   {activeReport.recipes.map((rec: any) => (
                     <div
                       key={rec.id}
-                      className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex flex-col justify-between gap-3 group hover:border-amber-500/40 transition-all shadow-sm"
+                      className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 flex flex-col justify-between gap-3 group hover:border-amber-500/40 transition-all shadow-sm relative overflow-hidden"
                     >
-                      <div className="space-y-1.5">
-                        {rec.image_url && (
-                          <img
-                            src={rec.image_url}
-                            alt={rec.title}
-                            className="w-full h-28 object-cover rounded-xl mb-2"
-                          />
-                        )}
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                          {rec.dish_type || 'Plato Dietista'}
-                        </span>
-                        <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-2">
-                          {rec.title}
-                        </h4>
-                        <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                      <div className="space-y-2">
+                        {/* Recipe Image with Fallback */}
+                        <div className="relative w-full h-32 rounded-xl overflow-hidden bg-slate-200 dark:bg-zinc-800">
+                          {rec.image_url ? (
+                            <img
+                              src={rec.image_url}
+                              alt={rec.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 dark:text-zinc-500 text-xs gap-1">
+                              <ChefHat className="w-8 h-8 opacity-40" />
+                              <span className="text-[10px]">Sin imagen asignada</span>
+                            </div>
+                          )}
+
+                          {/* Privacy Badge overlay */}
+                          <div className="absolute top-2 left-2">
+                            {rec.is_private ? (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-purple-600/90 text-white backdrop-blur-md flex items-center gap-1 shadow-sm">
+                                <Lock className="w-3 h-3" />
+                                <span>Privada</span>
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-blue-600/90 text-white backdrop-blur-md flex items-center gap-1 shadow-sm">
+                                <Users className="w-3 h-3" />
+                                <span>Familiar</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Category & Title */}
+                        <div>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 inline-block mb-1">
+                            {rec.dish_type || 'Plato Dietista'}
+                          </span>
+                          <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-2 leading-snug">
+                            {rec.title}
+                          </h4>
+                        </div>
+
+                        {/* Metrics: Prep time & Calories */}
+                        <div className="flex items-center gap-2 text-[10px] text-slate-500 font-medium">
                           {rec.prep_time_min && <span>⏱️ {rec.prep_time_min} min</span>}
                           {rec.nutrition_calories && <span>🔥 {rec.nutrition_calories} kcal</span>}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 pt-1 border-t border-slate-200 dark:border-zinc-800">
-                        <Link
-                          to={`/recipes/${rec.id}`}
-                          className="flex-1 py-1.5 text-center rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-[11px] font-bold text-slate-700 dark:text-zinc-300 hover:border-amber-500 transition-colors"
-                        >
-                          Ver Receta
-                        </Link>
-                        <Link
-                          to={`/cook/${rec.id}`}
-                          className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 text-[11px] font-bold transition-colors"
-                          title="Modo Cocina guiado"
-                        >
-                          Cocinar
-                        </Link>
+                      {/* Card Footer Actions */}
+                      <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-zinc-800">
+                        {/* Toggle Privacy & AI Review */}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleRecipePrivacy(rec.id)}
+                            className={`flex-1 py-1 px-2 rounded-lg text-[10px] font-bold border transition-colors flex items-center justify-center gap-1 ${
+                              rec.is_private
+                                ? 'bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/30 text-purple-700 dark:text-purple-300'
+                                : 'bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/30 text-blue-700 dark:text-blue-300'
+                            }`}
+                            title={rec.is_private ? 'Pasar receta al recetario familiar de tu hogar' : 'Mover receta a tu cajón privado'}
+                          >
+                            {rec.is_private ? (
+                              <>
+                                <Users className="w-3 h-3 text-purple-500" />
+                                <span>Pasar a Familiar</span>
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="w-3 h-3 text-blue-500" />
+                                <span>Mover a Privada</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleAiReviewRecipe(rec.id)}
+                            disabled={reviewingRecipeId === rec.id}
+                            className="p-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-[10px] font-bold transition-colors disabled:opacity-50"
+                            title="Vistazo de la IA: buscar foto auténtica y recalcular nutrición/trucos"
+                          >
+                            {reviewingRecipeId === rec.id ? (
+                              <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Sparkles className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+
+                        {/* Navigation Buttons */}
+                        <div className="flex items-center gap-1.5">
+                          <Link
+                            to={`/recipes/${rec.id}`}
+                            className="flex-1 py-1.5 text-center rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-[11px] font-bold text-slate-700 dark:text-zinc-300 hover:border-amber-500 transition-colors"
+                          >
+                            Ver Receta
+                          </Link>
+                          <Link
+                            to={`/cook/${rec.id}`}
+                            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 text-[11px] font-bold transition-colors"
+                            title="Modo Cocina guiado"
+                          >
+                            Cocinar
+                          </Link>
+                        </div>
                       </div>
                     </div>
                   ))}

@@ -86,6 +86,19 @@ class GeminiService:
         }
         return deprecated.get(normalized, normalized)
 
+    @staticmethod
+    def _clean_json_response(text: str) -> str:
+        if not text:
+            return "{}"
+        t = text.strip()
+        if t.startswith("```json"):
+            t = t[7:]
+        elif t.startswith("```"):
+            t = t[3:]
+        if t.endswith("```"):
+            t = t[:-3]
+        return t.strip()
+
     def _generate_with_fallback(self, client, contents: Any, config: Any = None) -> Any:
         candidate_models = [self.model_name] + [
             "gemini-3.5-flash-lite",
@@ -376,13 +389,15 @@ class GeminiService:
         title: str,
         ingredients: List[Any],
         base_servings: int = 4,
-        dish_type: Optional[str] = None
+        dish_type: Optional[str] = None,
+        servings: Optional[int] = None
     ) -> Dict[str, float]:
         """
         Estimates nutritional values (calories, protein, carbs, fat per serving)
         using Gemini API, or falls back to intelligent nutritional heuristics.
         """
-        servings = max(1, int(base_servings or 4))
+        effective_servings = servings if servings is not None else base_servings
+        servings = max(1, int(effective_servings or 4))
         if self.is_configured():
             try:
                 client = self._get_client()

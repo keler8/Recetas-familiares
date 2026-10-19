@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Heart, Clock, Star, ChefHat, Play,
   Sparkles, Flame, Check, MessageSquare, StickyNote,
-  AlertTriangle, Share2, Edit3, ExternalLink, Trash2, Lock, Lightbulb
+  AlertTriangle, Share2, Edit3, ExternalLink, Trash2, Lock, Lightbulb, Unlock, Users
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -24,6 +24,34 @@ export const RecipeDetailPage: React.FC = () => {
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isGeneratingVariant, setIsGeneratingVariant] = useState(false);
   const [isRecalculatingNutrition, setIsRecalculatingNutrition] = useState(false);
+  const [isTogglingPrivacy, setIsTogglingPrivacy] = useState(false);
+  const [isAiReviewing, setIsAiReviewing] = useState(false);
+
+  const handleTogglePrivacy = async () => {
+    if (!recipe) return;
+    setIsTogglingPrivacy(true);
+    try {
+      const res = await apiRequest(`/recipes/${recipe.id}/toggle-privacy`, { method: 'POST' });
+      setRecipe({ ...recipe, is_private: res.is_private });
+    } catch (err: any) {
+      alert(`Error al cambiar privacidad: ${err.message || err}`);
+    } finally {
+      setIsTogglingPrivacy(false);
+    }
+  };
+
+  const handleAiReview = async () => {
+    if (!recipe) return;
+    setIsAiReviewing(true);
+    try {
+      const updated = await apiRequest(`/recipes/${recipe.id}/ai-review`, { method: 'POST' });
+      setRecipe(updated);
+    } catch (err: any) {
+      alert(`Error en el vistazo IA: ${err.message || err}`);
+    } finally {
+      setIsAiReviewing(false);
+    }
+  };
 
   const handleRecalculateNutrition = async () => {
     if (!recipe) return;
@@ -274,12 +302,69 @@ export const RecipeDetailPage: React.FC = () => {
             )}
           </div>
 
-          {recipe.is_private && (
-            <div className="mt-3 p-3 rounded-xl bg-purple-950/30 border border-purple-500/30 flex items-center gap-2.5 text-xs text-purple-300 shadow-sm">
-              <Lock className="w-4 h-4 text-purple-400 shrink-0" />
-              <span>Esta receta está en tu cajón personal privado. Solo tú puedes verla en tu cuenta.</span>
+          {/* Privacy status & action banner */}
+          <div className="mt-4 p-3.5 rounded-2xl bg-zinc-900 border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div className="flex items-center gap-2.5 text-xs">
+              {recipe.is_private ? (
+                <>
+                  <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="font-bold text-purple-300 block">Receta Privada (Cajón personal)</span>
+                    <span className="text-zinc-400 text-[11px]">Solo tú puedes verla en tu cuenta.</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-8 h-8 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
+                    <Users className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="font-bold text-blue-300 block">Receta Familiar</span>
+                    <span className="text-zinc-400 text-[11px]">Visible en el recetario común de toda la familia.</span>
+                  </div>
+                </>
+              )}
             </div>
-          )}
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleTogglePrivacy}
+                disabled={isTogglingPrivacy}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50 ${
+                  recipe.is_private
+                    ? 'bg-purple-600 hover:bg-purple-500 text-white'
+                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
+                }`}
+                title={recipe.is_private ? "Compartir con el recetario familiar" : "Hacer privada"}
+              >
+                {recipe.is_private ? (
+                  <>
+                    <Unlock className="w-3.5 h-3.5" />
+                    <span>Pasar a Familiar</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Mover a Privada</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleAiReview}
+                disabled={isAiReviewing}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                title="Buscar foto con IA y generar trucos + calorías"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${isAiReviewing ? 'animate-spin' : ''}`} />
+                <span>{isAiReviewing ? 'Revisando...' : 'Vistazo IA'}</span>
+              </button>
+            </div>
+          </div>
 
           {/* Nutritional Info Banner */}
           {recipe.nutrition_calories ? (

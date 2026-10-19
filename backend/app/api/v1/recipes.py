@@ -977,3 +977,89 @@ def suggest_recipe_tips_for_id_endpoint(
     db.commit()
     db.refresh(recipe)
     return _format_recipe_response(recipe, current_user.id, db)
+
+
+@router.post("/{recipe_id}/toggle-privacy", response_model=RecipeResponse)
+def toggle_recipe_privacy_endpoint(
+    recipe_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Toggles privacy of a recipe between Private (only owner) and Family/Household."""
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para modificar la privacidad de esta receta")
+
+    recipe.is_private = not bool(recipe.is_private)
+    recipe.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(recipe)
+    return _format_recipe_response(recipe, current_user.id, db)
+
+
+@router.post("/{recipe_id}/ai-review", response_model=RecipeResponse)
+def ai_review_recipe_endpoint(
+    recipe_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Performs a complete AI review on the recipe:
+    - Searches for and assigns an authentic food photograph if missing.
+    - Estimates nutrition macros (protein, carbs, fat, calories).
+    - Generates chef tips, preservation, freezing, and reheating notes.
+    """
+    recipe = db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+    if recipe.is_private and recipe.created_by_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receta no encontrada")
+
+    # 1. Search image if missing
+    if not recipe.main_image_url:
+        recipe.main_image_url = gemini_service.generate_or_find_recipe_image(recipe.title, recipe.dish_type, recipe.cuisine)
+
+    variant = next((v for v in recipe.variants if v.is_default), recipe.variants[0] if recipe.variants else None)
+    if variant:
+        ings = [ing.name for ing in variant.ingredients]
+        ing_lines = [f"{ing.amount or ''} {ing.unit or ''} {ing.name}".strip() for ing in variant.ingredients]
+
+        # 2. Tips
+        tips = gemini_service.suggest_recipe_tips(
+            title=recipe.title,
+            ingredients=ings,
+            dish_type=recipe.dish_type
+        )
+        if tips.get("chef_notes"):
+            recipe.chef_notes = tips["chef_notes"]
+        if tips.get("preservation_tips"):
+            recipe.preservation_tips = tips["preservation_tips"]
+        if tips.get("freezing_tips"):
+            recipe.freezing_tips = tips["freezing_tips"]
+        if tips.get("reheating_tips"):
+            recipe.reheating_tips = tips["reheating_tips"]
+
+        # 3. Nutrition
+        nut = gemini_service.estimate_recipe_nutrition(
+            title=recipe.title,
+            ingredients=ing_lines,
+            base_servings=recipe.base_servings or 2,
+            dish_type=recipe.dish_type
+        )
+        if nut:
+            if not recipe.nutrition_calories and nut.get("calories"):
+                recipe.nutrition_calories = nut["calories"]
+            if nut.get("protein") is not None:
+                recipe.nutrition_protein = nut["protein"]
+            if nut.get("carbs") is not None:
+                recipe.nutrition_carbs = nut["carbs"]
+            if nut.get("fat") is not None:
+                recipe.nutrition_fat = nut["fat"]
+
+    recipe.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(recipe)
+    return _format_recipe_response(recipe, current_user.id, db)
+
