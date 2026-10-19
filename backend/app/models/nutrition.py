@@ -63,6 +63,7 @@ class DietitianReport(Base):
     raw_plan_data = Column(Text, nullable=True)  # JSON string list of days/meals
     created_recipes_ids = Column(Text, nullable=True)  # JSON string list of recipe IDs
     household_servings = Column(Integer, default=2, nullable=False)
+    version = Column(Integer, default=1, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

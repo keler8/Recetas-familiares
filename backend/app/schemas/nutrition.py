@@ -85,12 +85,19 @@ class DietitianReportRecipeItem(BaseModel):
     is_private: Optional[bool] = False
 
 
+class DietitianReportWeek(BaseModel):
+    week_number: int
+    week_title: str
+    days: List[dict] = []
+
+
 class DietitianReportResponse(BaseModel):
     id: int
     household_id: int
     user_id: Optional[int] = None
     diner_id: Optional[int] = None
     title: str
+    version: int = 1
     patient_name: Optional[str] = None
     target_calories: Optional[int] = None
     dietary_goal: Optional[str] = None
@@ -100,6 +107,7 @@ class DietitianReportResponse(BaseModel):
     excluded_foods: Optional[str] = None
     notes: Optional[str] = None
     raw_plan_data: Optional[List[dict]] = []
+    weeks: List[DietitianReportWeek] = []
     created_recipes_ids: List[int] = []
     recipes: List[DietitianReportRecipeItem] = []
     household_servings: int = 2
@@ -114,3 +122,19 @@ class DietitianReportResponse(BaseModel):
 class ApplyReportToWeekRequest(BaseModel):
     target_start_date: str  # YYYY-MM-DD
     household_servings: Optional[int] = None
+    week_number: Optional[int] = None
+
+
+class ReportVersionUpdateRequest(BaseModel):
+    mode: str = "append"  # "append" (Añadir actualización) or "replace" (Reemplazar por completo)
+    week_title: Optional[str] = None
+    create_missing_recipes: bool = True
+    household_servings: Optional[int] = None
+    target_calories: Optional[int] = None
+    dietary_goal: Optional[str] = None
+    habits: Optional[str] = None
+    new_guidelines: List[str] = []
+    preferred_foods: Optional[str] = None
+    excluded_foods: Optional[str] = None
+    notes: Optional[str] = None
+    days: List[dict] = []

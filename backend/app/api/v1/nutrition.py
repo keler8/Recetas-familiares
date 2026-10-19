@@ -7,14 +7,15 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.auth import User
 from app.models.household import Household
-from app.models.recipe import Recipe
+from app.models.recipe import Recipe, RecipeVariant, RecipeIngredient, RecipeStep
 from app.models.meal_plan import MealPlan, MealSlot, PlannedRecipe
 from app.models.nutrition import NutritionProfile, NutritionConsent, DietitianReport
 from app.schemas.nutrition import (
     NutritionProfileResponse, NutritionProfileUpdate,
     NutritionConsentRequest, NutritionAdviceRequest,
     DietitianReportResponse, DietitianReportUpdate,
-    ApplyReportToWeekRequest
+    ApplyReportToWeekRequest, DietitianReportWeek,
+    ReportVersionUpdateRequest
 )
 from app.api.deps import get_current_user, get_current_household
 from app.services.gemini_service import gemini_service
@@ -248,11 +249,24 @@ def _format_report_response(report: DietitianReport, db: Session) -> Dict[str, A
             guidelines = [g.strip() for g in str(report.dietary_guidelines).split("\n") if g.strip()]
 
     plan_days = []
+    weeks_list = []
     if report.raw_plan_data:
         try:
-            plan_days = json.loads(report.raw_plan_data)
+            parsed_raw = json.loads(report.raw_plan_data)
+            if isinstance(parsed_raw, list):
+                if parsed_raw and isinstance(parsed_raw[0], dict) and "week_number" in parsed_raw[0]:
+                    weeks_list = parsed_raw
+                    plan_days = parsed_raw[-1].get("days", [])
+                else:
+                    plan_days = parsed_raw
+                    weeks_list = [{
+                        "week_number": 1,
+                        "week_title": "Semana 1",
+                        "days": plan_days
+                    }]
         except Exception:
             plan_days = []
+            weeks_list = []
 
     created_recipe_ids = []
     if report.created_recipes_ids:
@@ -290,6 +304,7 @@ def _format_report_response(report: DietitianReport, db: Session) -> Dict[str, A
         "user_id": report.user_id,
         "diner_id": report.diner_id,
         "title": report.title,
+        "version": report.version or 1,
         "patient_name": report.patient_name,
         "target_calories": report.target_calories,
         "dietary_goal": report.dietary_goal,
@@ -299,6 +314,7 @@ def _format_report_response(report: DietitianReport, db: Session) -> Dict[str, A
         "excluded_foods": report.excluded_foods,
         "notes": report.notes,
         "raw_plan_data": plan_days,
+        "weeks": weeks_list,
         "created_recipes_ids": created_recipe_ids,
         "recipes": recipes_list,
         "household_servings": report.household_servings,
@@ -474,7 +490,18 @@ def apply_report_to_week(
     days_data = []
     if report.raw_plan_data:
         try:
-            days_data = json.loads(report.raw_plan_data)
+            parsed_raw = json.loads(report.raw_plan_data)
+            if isinstance(parsed_raw, list):
+                if parsed_raw and isinstance(parsed_raw[0], dict) and "week_number" in parsed_raw[0]:
+                    target_w = req.week_number or (parsed_raw[-1].get("week_number", 1))
+                    for w in parsed_raw:
+                        if w.get("week_number") == target_w:
+                            days_data = w.get("days", [])
+                            break
+                    if not days_data and parsed_raw:
+                        days_data = parsed_raw[0].get("days", [])
+                else:
+                    days_data = parsed_raw
         except Exception:
             days_data = []
 
@@ -539,6 +566,202 @@ def apply_report_to_week(
         "end_date": str(sunday),
         "meals_planned": planned_count
     }
+
+
+@router.post("/reports/{report_id}/update-version", response_model=DietitianReportResponse)
+def update_report_version(
+    report_id: int,
+    req: ReportVersionUpdateRequest,
+    household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Updates a dietitian report by either appending a new revision (version 2, new week of menu, additional recipes, extra tips)
+    or replacing the report contents entirely.
+    """
+    report = db.query(DietitianReport).filter(
+        DietitianReport.id == report_id,
+        DietitianReport.household_id == household.id
+    ).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
+
+    servings = req.household_servings or report.household_servings or 2
+
+    # 1. Create missing recipes if requested
+    created_recipes_cache = {}
+    new_recipe_ids = []
+
+    for d in req.days:
+        meals = d.get("meals", []) if isinstance(d, dict) else getattr(d, "meals", [])
+        for m in meals:
+            m_dict = m if isinstance(m, dict) else m.model_dump()
+            is_rec = m_dict.get("is_recipe", False)
+            title = str(m_dict.get("title", "")).strip()
+            final_rec_id = m_dict.get("recipe_id")
+
+            if req.create_missing_recipes and is_rec and not final_rec_id and title:
+                if title in created_recipes_cache:
+                    final_rec_id = created_recipes_cache[title]
+                else:
+                    new_rec = Recipe(
+                        title=title,
+                        description=m_dict.get("description") or f"Receta de revisión del plan nutricional ({m_dict.get('meal_type', 'comida')}) adaptada para {servings} raciones.",
+                        prep_time_min=10,
+                        cook_time_min=20,
+                        total_time_min=30,
+                        difficulty="facil",
+                        base_servings=servings,
+                        nutrition_calories=m_dict.get("calories"),
+                        categories=json.dumps(["Comidas", "Plan Nutricional"], ensure_ascii=False),
+                        tags=json.dumps(["saludable", "plan_nutricional", "dietista", "revision_ia"], ensure_ascii=False),
+                        dish_type="Plato Principal" if m_dict.get("meal_type") in ["comida", "cena"] else "Desayuno / Snack",
+                        meal_type="desayuno" if m_dict.get("meal_type") == "desayuno" else ("comida_cena" if m_dict.get("meal_type") in ["comida", "cena"] else "almuerzo_merienda"),
+                        source_type="plan_nutricional_ia",
+                        review_status="approved",
+                        created_by_id=current_user.id
+                    )
+                    db.add(new_rec)
+                    db.flush()
+
+                    variant = RecipeVariant(
+                        recipe_id=new_rec.id,
+                        variant_type="traditional",
+                        title=f"Preparación para {servings} raciones",
+                        is_default=True
+                    )
+                    db.add(variant)
+                    db.flush()
+
+                    for idx_ing, ing in enumerate(m_dict.get("ingredients", [])):
+                        ing_amt = ing.get("amount") if isinstance(ing, dict) else getattr(ing, "amount", None)
+                        scaled_amt = round(float(ing_amt) * servings, 2) if ing_amt is not None else None
+                        db.add(RecipeIngredient(
+                            variant_id=variant.id,
+                            name=ing.get("name", "") if isinstance(ing, dict) else getattr(ing, "name", ""),
+                            amount=scaled_amt,
+                            unit=ing.get("unit") if isinstance(ing, dict) else getattr(ing, "unit", None),
+                            order_index=idx_ing
+                        ))
+
+                    steps = m_dict.get("steps", [])
+                    if steps:
+                        for st in steps:
+                            st_num = st.get("step_number") if isinstance(st, dict) else getattr(st, "step_number", 1)
+                            st_ins = st.get("instruction") if isinstance(st, dict) else getattr(st, "instruction", "")
+                            db.add(RecipeStep(variant_id=variant.id, step_number=st_num, instruction=st_ins))
+                    else:
+                        db.add(RecipeStep(variant_id=variant.id, step_number=1, instruction=f"Preparar los ingredientes adaptados para {servings} raciones y cocinar siguiendo pautas saludables."))
+
+                    db.flush()
+                    final_rec_id = new_rec.id
+                    created_recipes_cache[title] = new_rec.id
+                    new_recipe_ids.append(new_rec.id)
+
+            if isinstance(m, dict):
+                m["recipe_id"] = final_rec_id
+
+    # Parse existing recipes
+    current_rec_ids = []
+    if report.created_recipes_ids:
+        try:
+            current_rec_ids = json.loads(report.created_recipes_ids)
+        except Exception:
+            current_rec_ids = []
+
+    # Parse existing guidelines
+    current_guidelines = []
+    if report.dietary_guidelines:
+        try:
+            parsed_g = json.loads(report.dietary_guidelines)
+            if isinstance(parsed_g, list):
+                current_guidelines = parsed_g
+        except Exception:
+            current_guidelines = [g.strip() for g in str(report.dietary_guidelines).split("\n") if g.strip()]
+
+    now_str = datetime.utcnow().strftime("%d/%m/%Y")
+
+    if req.mode == "replace":
+        # Full replacement
+        report.title = req.week_title or f"Informe Nutricional (Actualizado {now_str})"
+        report.version = (report.version or 1) + 1
+        if req.target_calories is not None:
+            report.target_calories = req.target_calories
+        if req.dietary_goal is not None:
+            report.dietary_goal = req.dietary_goal
+        if req.habits is not None:
+            report.habits = req.habits
+        if req.preferred_foods is not None:
+            report.preferred_foods = req.preferred_foods
+        if req.excluded_foods is not None:
+            report.excluded_foods = req.excluded_foods
+        if req.notes is not None:
+            report.notes = req.notes
+        report.dietary_guidelines = json.dumps(req.new_guidelines or [], ensure_ascii=False)
+        report.created_recipes_ids = json.dumps(list(set(new_recipe_ids)), ensure_ascii=False)
+        report.raw_plan_data = json.dumps([
+            {"week_number": 1, "week_title": "Semana 1", "days": req.days}
+        ], ensure_ascii=False, default=str)
+    else:
+        # Incremental update (version 2, add week, append tips and recipes)
+        report.version = (report.version or 1) + 1
+
+        # Merge guidelines without duplicates
+        existing_norm = {g.strip().lower() for g in current_guidelines}
+        merged_guidelines = list(current_guidelines)
+        for ng in req.new_guidelines:
+            if ng.strip() and ng.strip().lower() not in existing_norm:
+                merged_guidelines.append(ng.strip())
+                existing_norm.add(ng.strip().lower())
+        report.dietary_guidelines = json.dumps(merged_guidelines, ensure_ascii=False)
+
+        # Merge recipe IDs
+        all_rec_ids = list(set(current_rec_ids + new_recipe_ids))
+        report.created_recipes_ids = json.dumps(all_rec_ids, ensure_ascii=False)
+
+        # Merge weeks
+        existing_weeks = []
+        if report.raw_plan_data:
+            try:
+                parsed_raw = json.loads(report.raw_plan_data)
+                if isinstance(parsed_raw, list):
+                    if parsed_raw and isinstance(parsed_raw[0], dict) and "week_number" in parsed_raw[0]:
+                        existing_weeks = parsed_raw
+                    else:
+                        existing_weeks = [{"week_number": 1, "week_title": "Semana 1", "days": parsed_raw}]
+            except Exception:
+                existing_weeks = []
+
+        new_week_num = len(existing_weeks) + 1
+        new_week_title = req.week_title or f"Semana {new_week_num} (Revisión {now_str})"
+        existing_weeks.append({
+            "week_number": new_week_num,
+            "week_title": new_week_title,
+            "days": req.days
+        })
+        report.raw_plan_data = json.dumps(existing_weeks, ensure_ascii=False, default=str)
+
+        # Update metadata if new values given
+        if req.target_calories is not None:
+            report.target_calories = req.target_calories
+        if req.dietary_goal is not None:
+            report.dietary_goal = req.dietary_goal
+        if req.habits:
+            report.habits = f"{report.habits or ''}\n[Revisión v{report.version}]: {req.habits}".strip()
+        if req.notes:
+            report.notes = f"{report.notes or ''}\n[Revisión v{report.version}]: {req.notes}".strip()
+        if req.preferred_foods:
+            report.preferred_foods = f"{report.preferred_foods or ''}, {req.preferred_foods}".strip(", ")
+        if req.excluded_foods:
+            report.excluded_foods = f"{report.excluded_foods or ''}, {req.excluded_foods}".strip(", ")
+
+    report.household_servings = servings
+    report.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(report)
+
+    return _format_report_response(report, db)
 
 
 @router.get("/daily-tip")

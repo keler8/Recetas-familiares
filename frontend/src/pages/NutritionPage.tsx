@@ -5,7 +5,8 @@ import {
   Bot, Utensils, Flame, Clock, Zap, ChefHat, Users,
   ArrowRight, CheckCircle2, Sliders, ThumbsUp, ThumbsDown,
   Dumbbell, Target, Calculator, Plus, Trash2, Edit2, X, Activity, FileText,
-  Calendar, RotateCw, Lightbulb, BookOpen, ChevronRight, Send, Eye, CheckSquare
+  Calendar, RotateCw, Lightbulb, BookOpen, ChevronRight, Send, Eye, CheckSquare,
+  UploadCloud, Camera, RefreshCw, PlusCircle, Layers
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -33,6 +34,9 @@ export const NutritionPage: React.FC = () => {
   const [isSavingReport, setIsSavingReport] = useState(false);
   const [reportSaveSuccess, setReportSaveSuccess] = useState(false);
 
+  // Selected week index in proposed menu
+  const [selectedWeekIdx, setSelectedWeekIdx] = useState<number>(0);
+
   // Apply Report Menu to Week State
   const [targetApplyDate, setTargetApplyDate] = useState(() => {
     const today = new Date();
@@ -44,6 +48,26 @@ export const NutritionPage: React.FC = () => {
   const [applyServings, setApplyServings] = useState<number>(2);
   const [isApplyingToWeek, setIsApplyingToWeek] = useState(false);
   const [applyToWeekSuccess, setApplyToWeekSuccess] = useState<string | null>(null);
+
+  // Update / Replace Report Modal State
+  const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
+  const [updateMode, setUpdateMode] = useState<'append' | 'replace'>('append');
+  const [updateFile, setUpdateFile] = useState<File | null>(null);
+  const [updatePreview, setUpdatePreview] = useState<string | null>(null);
+  const [isAnalyzingUpdate, setIsAnalyzingUpdate] = useState<boolean>(false);
+  const [updateAnalysisError, setUpdateAnalysisError] = useState<string | null>(null);
+  const [parsedUpdatePlan, setParsedUpdatePlan] = useState<any | null>(null);
+
+  // Editable fields in the update review
+  const [updateWeekTitle, setUpdateWeekTitle] = useState<string>('');
+  const [updateTargetCalories, setUpdateTargetCalories] = useState<number | ''>('');
+  const [updateDietaryGoal, setUpdateDietaryGoal] = useState<string>('');
+  const [updateNewGuidelines, setUpdateNewGuidelines] = useState<string[]>([]);
+  const [updateExtraGuideline, setUpdateExtraGuideline] = useState<string>('');
+  const [updateHabits, setUpdateHabits] = useState<string>('');
+  const [updateNotes, setUpdateNotes] = useState<string>('');
+  const [isSavingUpdateVersion, setIsSavingUpdateVersion] = useState<boolean>(false);
+  const [updateSuccessToast, setUpdateSuccessToast] = useState<string | null>(null);
 
   // Form states - Dietary & Habits
   const [dietaryGoals, setDietaryGoals] = useState('Dieta mediterránea rica en verduras y AOVE');
@@ -233,19 +257,135 @@ export const NutritionPage: React.FC = () => {
     setIsApplyingToWeek(true);
     setApplyToWeekSuccess(null);
     try {
+      const weeksList = activeReport.weeks && activeReport.weeks.length > 0
+        ? activeReport.weeks
+        : [{ week_number: 1, week_title: "Semana 1", days: activeReport.raw_plan_data || [] }];
+      const currentWeekObj = weeksList[selectedWeekIdx] || weeksList[0];
+      const targetWeekNum = currentWeekObj?.week_number || (selectedWeekIdx + 1);
+
       const res = await apiRequest(`/nutrition/reports/${activeReport.id}/apply-to-week`, {
         method: 'POST',
         body: JSON.stringify({
           target_start_date: targetApplyDate,
-          household_servings: Number(applyServings)
+          household_servings: Number(applyServings),
+          week_number: targetWeekNum
         })
       });
-      setApplyToWeekSuccess(res.message || 'Menú aplicado correctamente a la semana seleccionada.');
+      setApplyToWeekSuccess(res.message || `Menú de ${currentWeekObj?.week_title || `Semana ${targetWeekNum}`} aplicado correctamente.`);
       setTimeout(() => setApplyToWeekSuccess(null), 5000);
     } catch (err: any) {
       alert(err.message || 'Error al aplicar el menú a la semana');
     } finally {
       setIsApplyingToWeek(false);
+    }
+  };
+
+  const handleOpenUpdateModal = (mode: 'append' | 'replace') => {
+    setUpdateMode(mode);
+    setUpdateFile(null);
+    setUpdatePreview(null);
+    setParsedUpdatePlan(null);
+    setUpdateAnalysisError(null);
+    const nextWeekNum = (activeReport?.weeks?.length || 1) + 1;
+    setUpdateWeekTitle(mode === 'append' ? `Semana ${nextWeekNum} (Revisión)` : 'Informe Nutricional Actualizado');
+    setUpdateTargetCalories(activeReport?.target_calories || '');
+    setUpdateDietaryGoal(activeReport?.dietary_goal || 'mantenimiento');
+    setUpdateNewGuidelines([]);
+    setUpdateExtraGuideline('');
+    setUpdateHabits('');
+    setUpdateNotes('');
+    setShowUpdateModal(true);
+  };
+
+  const handleUpdateFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setUpdateFile(file);
+      setUpdateAnalysisError(null);
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (ev) => setUpdatePreview(ev.target?.result as string);
+        reader.readAsDataURL(file);
+      } else {
+        setUpdatePreview(null);
+      }
+    }
+  };
+
+  const handleAnalyzeUpdate = async () => {
+    if (!updateFile) {
+      setUpdateAnalysisError('Por favor selecciona una imagen o documento PDF de la actualización');
+      return;
+    }
+    setIsAnalyzingUpdate(true);
+    setUpdateAnalysisError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', updateFile);
+      const data = await apiRequest('/meal-plans/import-nutrition-image', {
+        method: 'POST',
+        body: formData
+      });
+      setParsedUpdatePlan(data);
+      const nextWeekNum = (activeReport?.weeks?.length || 1) + 1;
+      setUpdateWeekTitle(updateMode === 'append' ? `Semana ${nextWeekNum} (Revisión)` : (data.plan_title || 'Informe Nutricional Actualizado'));
+      if (data.target_calories) setUpdateTargetCalories(data.target_calories);
+      if (data.dietary_goal) setUpdateDietaryGoal(data.dietary_goal);
+      if (data.dietary_guidelines) setUpdateNewGuidelines(data.dietary_guidelines);
+      if (data.habits) setUpdateHabits(data.habits);
+      if (data.notes) setUpdateNotes(data.notes);
+    } catch (err: any) {
+      setUpdateAnalysisError(err.message || 'Error al analizar el informe con IA');
+    } finally {
+      setIsAnalyzingUpdate(false);
+    }
+  };
+
+  const handleSaveUpdateVersion = async () => {
+    if (!activeReport || !parsedUpdatePlan) return;
+    setIsSavingUpdateVersion(true);
+    try {
+      const updated = await apiRequest(`/nutrition/reports/${activeReport.id}/update-version`, {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: updateMode,
+          week_title: updateWeekTitle,
+          create_missing_recipes: true,
+          household_servings: activeReport.household_servings || 2,
+          target_calories: updateTargetCalories ? Number(updateTargetCalories) : null,
+          dietary_goal: updateDietaryGoal || null,
+          habits: updateHabits || null,
+          new_guidelines: updateNewGuidelines,
+          preferred_foods: parsedUpdatePlan.preferred_foods || null,
+          excluded_foods: parsedUpdatePlan.excluded_foods || null,
+          notes: updateNotes || null,
+          days: parsedUpdatePlan.days || []
+        })
+      });
+
+      setActiveReport(updated);
+      if (updated.dietary_guidelines) setEditingGuidelines(updated.dietary_guidelines);
+      if (updated.weeks && updated.weeks.length > 0) {
+        setSelectedWeekIdx(updated.weeks.length - 1);
+      }
+
+      setUpdateSuccessToast(
+        updateMode === 'append'
+          ? `¡Actualización completada con éxito! Se añadió la nueva semana (versión ${updated.version || 2}) y los nuevos tips revisados.`
+          : `¡Informe reemplazado con éxito!`
+      );
+      setTimeout(() => setUpdateSuccessToast(null), 5000);
+
+      // Reset modal state
+      setShowUpdateModal(false);
+      setParsedUpdatePlan(null);
+      setUpdateFile(null);
+      setUpdatePreview(null);
+      setUpdateAnalysisError(null);
+    } catch (err: any) {
+      alert(err.message || 'Error al guardar la actualización');
+    } finally {
+      setIsSavingUpdateVersion(false);
     }
   };
 
@@ -483,6 +623,10 @@ export const NutritionPage: React.FC = () => {
                     <CheckCircle2 className="w-3 h-3" />
                     Siguiendo Actualmente
                   </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-amber-500" />
+                    Versión {activeReport.version || 1}
+                  </span>
                   {activeReport.patient_name && (
                     <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20">
                       Pauta para: {activeReport.patient_name}
@@ -509,16 +653,43 @@ export const NutritionPage: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap shrink-0">
-              <Link
-                to="/planner?scan=diet"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-bold text-xs transition-colors"
-                title="Subir un nuevo informe o actualizar el actual"
+              <button
+                type="button"
+                onClick={() => handleOpenUpdateModal('append')}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-sm transition-all"
+                title="Añadir nueva consulta/semana manteniendo el historial y pautas anteriores"
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <span>Actualizar / Subir Nuevo</span>
-              </Link>
+                <PlusCircle className="w-4 h-4" />
+                <span>Añadir Actualización (v{(activeReport.version || 1) + 1})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenUpdateModal('replace')}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-bold text-xs transition-colors"
+                title="Reemplazar por completo el informe actual"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                <span>Reemplazar Informe</span>
+              </button>
             </div>
           </div>
+
+          {/* Update Success Toast */}
+          {updateSuccessToast && (
+            <div className="p-3.5 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-bold flex items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                <span>{updateSuccessToast}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUpdateSuccessToast(null)}
+                className="text-emerald-600 hover:text-emerald-800 dark:hover:text-emerald-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           {/* Subtabs Header */}
           <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-950 rounded-2xl overflow-x-auto">
@@ -545,7 +716,9 @@ export const NutritionPage: React.FC = () => {
               }`}
             >
               <Calendar className={`w-4 h-4 ${activeReportTab === 'menu' ? 'text-emerald-500' : ''}`} />
-              <span>Menú Propuesto ({activeReport.raw_plan_data?.length || 0} días)</span>
+              <span>
+                Menú Propuesto {activeReport.weeks && activeReport.weeks.length > 1 ? `(${activeReport.weeks.length} semanas)` : `(${activeReport.raw_plan_data?.length || 0} días)`}
+              </span>
             </button>
 
             <button
@@ -694,120 +867,155 @@ export const NutritionPage: React.FC = () => {
           )}
 
           {/* Subtab 2: Menú Propuesto */}
-          {activeReportTab === 'menu' && (
-            <div className="space-y-4 pt-1">
-              {/* Action Bar: Apply to week */}
-              <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent border border-emerald-500/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                  <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                    <Send className="w-4 h-4 text-emerald-500" />
-                    <span>Enviar este menú a una semana del planificador</span>
-                  </h4>
-                  <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
-                    Elige la fecha de inicio (lunes) y las raciones deseadas para traspasar todo el menú propuesto a tu calendario semanal.
-                  </p>
-                </div>
+          {activeReportTab === 'menu' && (() => {
+            const weeksList = (activeReport.weeks && activeReport.weeks.length > 0)
+              ? activeReport.weeks
+              : [{ week_number: 1, week_title: "Semana 1", days: activeReport.raw_plan_data || [] }];
+            const currentWeekObj = weeksList[selectedWeekIdx] || weeksList[0];
+            const currentDays = currentWeekObj?.days || [];
 
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-900 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800">
-                    <span className="text-[11px] text-slate-500 font-bold">Semana:</span>
-                    <input
-                      type="date"
-                      value={targetApplyDate}
-                      onChange={(e) => setTargetApplyDate(e.target.value)}
-                      className="bg-transparent text-xs font-bold text-slate-800 dark:text-white focus:outline-none"
-                    />
+            return (
+              <div className="space-y-4 pt-1">
+                {/* Week Selector Pills if more than 1 week */}
+                {weeksList.length > 1 && (
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1 border-b border-slate-100 dark:border-zinc-800">
+                    <span className="text-xs font-bold text-slate-500 shrink-0">Semanas del informe:</span>
+                    {weeksList.map((w: any, idx: number) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setSelectedWeekIdx(idx)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+                          selectedWeekIdx === idx
+                            ? 'bg-emerald-500 text-zinc-950 shadow-md shadow-emerald-500/20'
+                            : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        <Calendar className="w-3.5 h-3.5" />
+                        <span>{w.week_title || `Semana ${w.week_number || idx + 1}`}</span>
+                        {idx === weeksList.length - 1 && (activeReport.version || 1) > 1 && (
+                          <span className="text-[10px] bg-emerald-600/30 text-emerald-950 dark:text-emerald-200 px-1.5 py-0.2 rounded-full ml-1">
+                            v{activeReport.version}
+                          </span>
+                        )}
+                      </button>
+                    ))}
                   </div>
-
-                  <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-900 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800">
-                    <Users className="w-3.5 h-3.5 text-slate-500" />
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={applyServings}
-                      onChange={(e) => setApplyServings(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-10 bg-transparent text-xs font-bold text-slate-800 dark:text-white focus:outline-none text-center"
-                    />
-                    <span className="text-[11px] text-slate-500">rac.</span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleApplyReportToWeek}
-                    disabled={isApplyingToWeek}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-bold text-xs shadow-md shadow-emerald-500/20 transition-all shrink-0"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>{isApplyingToWeek ? 'Aplicando...' : 'Aplicar Menú a la Semana'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {applyToWeekSuccess && (
-                <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    <span>{applyToWeekSuccess}</span>
-                  </div>
-                  <Link
-                    to={`/planner?date=${targetApplyDate}`}
-                    className="px-3 py-1 rounded-lg bg-emerald-500 text-zinc-950 font-bold text-[11px] hover:bg-emerald-400"
-                  >
-                    Ver en Planificador
-                  </Link>
-                </div>
-              )}
-
-              {/* Days List */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                {(!activeReport.raw_plan_data || activeReport.raw_plan_data.length === 0) ? (
-                  <p className="col-span-full text-xs text-slate-500 dark:text-zinc-400 italic text-center py-6">
-                    No se guardó el detalle diario de comidas para este informe.
-                  </p>
-                ) : (
-                  activeReport.raw_plan_data.map((d: any, dIdx: number) => (
-                    <div
-                      key={dIdx}
-                      className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-2.5"
-                    >
-                      <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-2">
-                        <span className="text-xs font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                          {d.day_name || `Día ${dIdx + 1}`}
-                        </span>
-                        <span className="text-[10px] text-slate-400">
-                          {d.meals?.length || 0} tomas
-                        </span>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        {d.meals?.map((m: any, mIdx: number) => (
-                          <div
-                            key={mIdx}
-                            className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 text-xs"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                                {m.meal_type}
-                              </span>
-                              <span className="font-bold text-slate-800 dark:text-zinc-200 truncate block">
-                                {m.title}
-                              </span>
-                            </div>
-                            {m.calories && (
-                              <span className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full shrink-0">
-                                {m.calories} kcal
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))
                 )}
+
+                {/* Action Bar: Apply to week */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent border border-emerald-500/20 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Send className="w-4 h-4 text-emerald-500" />
+                      <span>Enviar menú ({currentWeekObj?.week_title || `Semana ${selectedWeekIdx + 1}`}) al planificador</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">
+                      Elige la fecha de inicio (lunes) y las raciones deseadas para traspasar este menú propuesto a tu calendario semanal.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-900 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800">
+                      <span className="text-[11px] text-slate-500 font-bold">Semana:</span>
+                      <input
+                        type="date"
+                        value={targetApplyDate}
+                        onChange={(e) => setTargetApplyDate(e.target.value)}
+                        className="bg-transparent text-xs font-bold text-slate-800 dark:text-white focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-900 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-zinc-800">
+                      <Users className="w-3.5 h-3.5 text-slate-500" />
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={applyServings}
+                        onChange={(e) => setApplyServings(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-10 bg-transparent text-xs font-bold text-slate-800 dark:text-white focus:outline-none text-center"
+                      />
+                      <span className="text-[11px] text-slate-500">rac.</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleApplyReportToWeek}
+                      disabled={isApplyingToWeek}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-zinc-950 font-bold text-xs shadow-md shadow-emerald-500/20 transition-all shrink-0"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>{isApplyingToWeek ? 'Aplicando...' : 'Aplicar Menú a la Semana'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {applyToWeekSuccess && (
+                  <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>{applyToWeekSuccess}</span>
+                    </div>
+                    <Link
+                      to={`/planner?date=${targetApplyDate}`}
+                      className="px-3 py-1 rounded-lg bg-emerald-500 text-zinc-950 font-bold text-[11px] hover:bg-emerald-400"
+                    >
+                      Ver en Planificador
+                    </Link>
+                  </div>
+                )}
+
+                {/* Days List */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {(!currentDays || currentDays.length === 0) ? (
+                    <p className="col-span-full text-xs text-slate-500 dark:text-zinc-400 italic text-center py-6">
+                      No se guardó el detalle diario de comidas para esta semana.
+                    </p>
+                  ) : (
+                    currentDays.map((d: any, dIdx: number) => (
+                      <div
+                        key={dIdx}
+                        className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-2.5"
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-2">
+                          <span className="text-xs font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                            {d.day_name || `Día ${dIdx + 1}`}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {d.meals?.length || 0} tomas
+                          </span>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {d.meals?.map((m: any, mIdx: number) => (
+                            <div
+                              key={mIdx}
+                              className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 text-xs"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                                  {m.meal_type}
+                                </span>
+                                <span className="font-bold text-slate-800 dark:text-zinc-200 truncate block">
+                                  {m.title}
+                                </span>
+                              </div>
+                              {m.calories && (
+                                <span className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full shrink-0">
+                                  {m.calories} kcal
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Subtab 3: Recetas del Informe */}
           {activeReportTab === 'recipes' && (
@@ -1543,6 +1751,413 @@ export const NutritionPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Update / Replace Dietitian Report Modal */}
+      {showUpdateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl p-5 sm:p-6 space-y-5">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                  updateMode === 'append'
+                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                    : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                }`}>
+                  {updateMode === 'append' ? <PlusCircle className="w-5 h-5" /> : <RefreshCw className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">
+                    {updateMode === 'append'
+                      ? `Añadir Actualización al Informe (v${(activeReport?.version || 1) + 1})`
+                      : 'Reemplazar Informe Nutricional'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+                    {updateMode === 'append'
+                      ? 'Agrega una nueva semana de consulta conservando las anteriores y sumando nuevos consejos'
+                      : 'Sustituye por completo el informe actual con el nuevo documento'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowUpdateModal(false)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Mode Switcher Tabs */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-zinc-950 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setUpdateMode('append');
+                  const nextWeekNum = (activeReport?.weeks?.length || 1) + 1;
+                  setUpdateWeekTitle(`Semana ${nextWeekNum} (Revisión)`);
+                }}
+                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                  updateMode === 'append'
+                    ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                <span>Añadir Consulta / Semana</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUpdateMode('replace');
+                  setUpdateWeekTitle('Informe Nutricional Actualizado');
+                }}
+                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                  updateMode === 'replace'
+                    ? 'bg-rose-500 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Reemplazar Todo</span>
+              </button>
+            </div>
+
+            {/* Explanation Note */}
+            <div className={`p-3 rounded-2xl text-xs leading-relaxed ${
+              updateMode === 'append'
+                ? 'bg-amber-500/10 border border-amber-500/20 text-amber-800 dark:text-amber-300'
+                : 'bg-rose-500/10 border border-rose-500/20 text-rose-800 dark:text-rose-300'
+            }`}>
+              {updateMode === 'append' ? (
+                <span>
+                  💡 <strong>Modo Acumulativo:</strong> Tu semana anterior se conserva intacta (podrás verla y enviarla en cualquier momento). Las nuevas recetas y pautas detectadas por la IA se incorporarán sin sobrescribir las actuales.
+                </span>
+              ) : (
+                <span>
+                  ⚠️ <strong>Modo Reemplazo:</strong> Se sobrescribirá el menú y pautas del informe actual por el contenido del nuevo archivo.
+                </span>
+              )}
+            </div>
+
+            {/* Step 1: File selection & upload */}
+            {!parsedUpdatePlan ? (
+              <div className="space-y-4">
+                <div className="p-6 rounded-2xl border-2 border-dashed border-slate-200 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-950/50 text-center space-y-4">
+                  {updatePreview ? (
+                    <div className="space-y-3">
+                      <img
+                        src={updatePreview}
+                        alt="Vista previa informe"
+                        className="max-h-56 mx-auto rounded-xl object-contain border border-slate-200 dark:border-zinc-800 shadow-sm"
+                      />
+                      <p className="text-xs font-bold text-slate-700 dark:text-zinc-300 truncate max-w-xs mx-auto">
+                        {updateFile?.name}
+                      </p>
+                    </div>
+                  ) : updateFile ? (
+                    <div className="space-y-2 py-4">
+                      <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-500/10 text-rose-500 flex items-center justify-center">
+                        <FileText className="w-6 h-6" />
+                      </div>
+                      <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">
+                        {updateFile.name}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        {(updateFile.size / 1024 / 1024).toFixed(2)} MB · Documento listo para analizar
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 py-2">
+                      <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
+                        <UploadCloud className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-800 dark:text-zinc-200">
+                          Selecciona el documento o foto de la nueva revisión
+                        </p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          Formatos admitidos: PDF, JPG, PNG o fotografía directa
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Dual Action File Picker (PDF / Galería vs Cámara) */}
+                  <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                    <label className="cursor-pointer flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-300 font-bold text-xs shadow-sm transition-all">
+                      <FileText className="w-4 h-4 text-rose-500" />
+                      <span>{updateFile ? 'Cambiar archivo / PDF' : 'Elegir PDF o Galería'}</span>
+                      <input
+                        type="file"
+                        accept="application/pdf,image/*,.pdf"
+                        onChange={handleUpdateFileChange}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <label className="cursor-pointer flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-600 dark:text-amber-400 font-bold text-xs shadow-sm transition-all">
+                      <Camera className="w-4 h-4" />
+                      <span>Hacer foto con la cámara</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        onChange={handleUpdateFileChange}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                {updateAnalysisError && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{updateAnalysisError}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowUpdateModal(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAnalyzeUpdate}
+                    disabled={!updateFile || isAnalyzingUpdate}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-50 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition-all"
+                  >
+                    {isAnalyzingUpdate ? (
+                      <>
+                        <RotateCw className="w-4 h-4 animate-spin" />
+                        <span>Analizando con IA (Gemini Vision)...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4 fill-zinc-950" />
+                        <span>Analizar Documento con IA</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Step 2: AI Review & Confirmation */
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs font-bold">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+                    <span>¡Lectura completada por IA! Revisa y ajusta los datos antes de guardar:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setParsedUpdatePlan(null)}
+                    className="text-[11px] underline hover:text-emerald-900 dark:hover:text-white"
+                  >
+                    Volver a subir
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {/* Title of the update */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                      Título de esta revisión o semana
+                    </label>
+                    <input
+                      type="text"
+                      value={updateWeekTitle}
+                      onChange={(e) => setUpdateWeekTitle(e.target.value)}
+                      placeholder="ej. Semana 2 (Revisión de Julio)"
+                      className="w-full mt-1 px-3.5 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  {/* Calories & Goal */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 flex items-center gap-1">
+                        <Flame className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Calorías diarias objetivo</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={updateTargetCalories}
+                        onChange={(e) => setUpdateTargetCalories(e.target.value ? Number(e.target.value) : '')}
+                        placeholder="ej. 1950"
+                        className="w-full mt-1 px-3.5 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 flex items-center gap-1">
+                        <Target className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>Objetivo de la dieta</span>
+                      </label>
+                      <select
+                        value={updateDietaryGoal}
+                        onChange={(e) => setUpdateDietaryGoal(e.target.value)}
+                        className="w-full mt-1 px-3.5 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white"
+                      >
+                        <option value="mantenimiento">Mantenimiento</option>
+                        <option value="deficit">Déficit calórico (perder grasa)</option>
+                        <option value="superavit">Superávit (ganar músculo)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Days Detected Preview */}
+                  <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
+                        <Calendar className="w-4 h-4 text-emerald-500" />
+                        <span>Menú extraído ({parsedUpdatePlan.days?.length || 0} días)</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        {parsedUpdatePlan.days?.reduce((acc: number, d: any) => acc + (d.meals?.length || 0), 0) || 0} tomas detectadas
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {parsedUpdatePlan.days?.map((d: any, idx: number) => (
+                        <span
+                          key={idx}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-[11px] font-bold text-slate-700 dark:text-zinc-300 capitalize"
+                        >
+                          {d.day_name || `Día ${idx + 1}`} ({d.meals?.length || 0})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Dietary Guidelines / Tips */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-700 dark:text-zinc-300 flex items-center gap-1.5">
+                        <Lightbulb className="w-4 h-4 text-amber-500" />
+                        <span>
+                          {updateMode === 'append' ? 'Nuevas Pautas y Consejos detectados' : 'Pautas y Consejos'} ({updateNewGuidelines.length})
+                        </span>
+                      </label>
+                      {updateMode === 'append' && (
+                        <span className="text-[10px] text-slate-400">
+                          Se sumarán a tus {activeReport?.dietary_guidelines?.length || 0} pautas existentes
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                      {updateNewGuidelines.map((g, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-xs"
+                        >
+                          <span className="font-medium text-slate-800 dark:text-zinc-200 flex-1 break-words">
+                            {g}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setUpdateNewGuidelines(prev => prev.filter((_, i) => i !== idx))}
+                            className="p-1 rounded-lg hover:bg-rose-500/10 text-slate-400 hover:text-rose-500"
+                            title="Eliminar pauta"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+
+                      {/* Add extra guideline input */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          value={updateExtraGuideline}
+                          onChange={(e) => setUpdateExtraGuideline(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (updateExtraGuideline.trim()) {
+                                setUpdateNewGuidelines(prev => [...prev, updateExtraGuideline.trim()]);
+                                setUpdateExtraGuideline('');
+                              }
+                            }
+                          }}
+                          placeholder="Añadir otro tip o pauta..."
+                          className="flex-1 px-3 py-1.5 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-800 dark:text-zinc-200"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (updateExtraGuideline.trim()) {
+                              setUpdateNewGuidelines(prev => [...prev, updateExtraGuideline.trim()]);
+                              setUpdateExtraGuideline('');
+                            }
+                          }}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 text-xs font-bold"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Notes / Habits */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                      Notas y observaciones de la revisión
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={updateNotes}
+                      onChange={(e) => setUpdateNotes(e.target.value)}
+                      placeholder="Observaciones de la dietista para esta semana..."
+                      className="w-full mt-1 px-3.5 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-800 dark:text-zinc-200 resize-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => setParsedUpdatePlan(null)}
+                    disabled={isSavingUpdateVersion}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white"
+                  >
+                    Atrás
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveUpdateVersion}
+                    disabled={isSavingUpdateVersion}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all ${
+                      updateMode === 'append'
+                        ? 'bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-amber-500/20'
+                        : 'bg-rose-500 hover:bg-rose-400 text-white shadow-rose-500/20'
+                    }`}
+                  >
+                    {isSavingUpdateVersion ? (
+                      <>
+                        <RotateCw className="w-4 h-4 animate-spin" />
+                        <span>Guardando informe...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>
+                          {updateMode === 'append'
+                            ? `Guardar Actualización (v${(activeReport?.version || 1) + 1})`
+                            : 'Guardar y Reemplazar Informe'}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
