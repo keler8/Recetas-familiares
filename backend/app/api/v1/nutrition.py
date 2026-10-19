@@ -1,16 +1,22 @@
-from datetime import datetime
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+import json
+import random
+from datetime import datetime, date, timedelta
+from typing import Optional, Dict, Any, List
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.auth import User
+from app.models.household import Household
 from app.models.recipe import Recipe
-from app.models.nutrition import NutritionProfile, NutritionConsent
+from app.models.meal_plan import MealPlan, MealSlot, PlannedRecipe
+from app.models.nutrition import NutritionProfile, NutritionConsent, DietitianReport
 from app.schemas.nutrition import (
     NutritionProfileResponse, NutritionProfileUpdate,
-    NutritionConsentRequest, NutritionAdviceRequest
+    NutritionConsentRequest, NutritionAdviceRequest,
+    DietitianReportResponse, DietitianReportUpdate,
+    ApplyReportToWeekRequest
 )
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_current_household
 from app.services.gemini_service import gemini_service
 
 router = APIRouter(prefix="/nutrition", tags=["Mi Alimentación Saludable"])
@@ -226,4 +232,387 @@ def get_nutrition_advice(
         "healthy_recipe_variant": result.get("healthy_recipe_variant"),
         "disclaimer": "Orientación culinaria y nutricional familiar orientativa. No constituye prescripción médica.",
         "disclaimer_acknowledged": True
+    }
+
+
+def _format_report_response(report: DietitianReport, db: Session) -> Dict[str, Any]:
+    guidelines = []
+    if report.dietary_guidelines:
+        try:
+            parsed = json.loads(report.dietary_guidelines)
+            if isinstance(parsed, list):
+                guidelines = [str(x) for x in parsed if str(x).strip()]
+            elif isinstance(parsed, str):
+                guidelines = [parsed]
+        except Exception:
+            guidelines = [g.strip() for g in str(report.dietary_guidelines).split("\n") if g.strip()]
+
+    plan_days = []
+    if report.raw_plan_data:
+        try:
+            plan_days = json.loads(report.raw_plan_data)
+        except Exception:
+            plan_days = []
+
+    created_recipe_ids = []
+    if report.created_recipes_ids:
+        try:
+            created_recipe_ids = json.loads(report.created_recipes_ids)
+        except Exception:
+            created_recipe_ids = []
+
+    recipes_list = []
+    if created_recipe_ids:
+        recs = db.query(Recipe).filter(Recipe.id.in_(created_recipe_ids)).all()
+        for r in recs:
+            cats = []
+            if r.categories:
+                try:
+                    cats = json.loads(r.categories)
+                except Exception:
+                    cats = []
+            recipes_list.append({
+                "id": r.id,
+                "title": r.title,
+                "image_url": r.image_url,
+                "prep_time_min": r.prep_time_min,
+                "cook_time_min": r.cook_time_min,
+                "nutrition_calories": r.nutrition_calories,
+                "difficulty": r.difficulty,
+                "dish_type": r.dish_type,
+                "categories": cats,
+                "is_private": r.is_private
+            })
+
+    return {
+        "id": report.id,
+        "household_id": report.household_id,
+        "user_id": report.user_id,
+        "diner_id": report.diner_id,
+        "title": report.title,
+        "patient_name": report.patient_name,
+        "target_calories": report.target_calories,
+        "dietary_goal": report.dietary_goal,
+        "habits": report.habits,
+        "dietary_guidelines": guidelines,
+        "preferred_foods": report.preferred_foods,
+        "excluded_foods": report.excluded_foods,
+        "notes": report.notes,
+        "raw_plan_data": plan_days,
+        "created_recipes_ids": created_recipe_ids,
+        "recipes": recipes_list,
+        "household_servings": report.household_servings,
+        "is_active": report.is_active,
+        "created_at": report.created_at,
+        "updated_at": report.updated_at
+    }
+
+
+@router.get("/active-report", response_model=Optional[DietitianReportResponse])
+def get_active_dietitian_report(
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns the currently active dietitian report for the active household.
+    If none is explicitly active, returns the latest uploaded report if any.
+    """
+    report = db.query(DietitianReport).filter(
+        DietitianReport.household_id == household.id,
+        DietitianReport.is_active == True
+    ).order_by(DietitianReport.created_at.desc()).first()
+
+    if not report:
+        report = db.query(DietitianReport).filter(
+            DietitianReport.household_id == household.id
+        ).order_by(DietitianReport.created_at.desc()).first()
+
+    if not report:
+        return None
+
+    return _format_report_response(report, db)
+
+
+@router.get("/reports", response_model=List[DietitianReportResponse])
+def list_dietitian_reports(
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    """
+    Lists all dietitian reports uploaded in the household.
+    """
+    reports = db.query(DietitianReport).filter(
+        DietitianReport.household_id == household.id
+    ).order_by(DietitianReport.created_at.desc()).all()
+
+    return [_format_report_response(r, db) for r in reports]
+
+
+@router.get("/reports/{report_id}", response_model=DietitianReportResponse)
+def get_dietitian_report_by_id(
+    report_id: int,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    report = db.query(DietitianReport).filter(
+        DietitianReport.id == report_id,
+        DietitianReport.household_id == household.id
+    ).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe de dietista no encontrado")
+    return _format_report_response(report, db)
+
+
+@router.put("/reports/{report_id}", response_model=DietitianReportResponse)
+def update_dietitian_report(
+    report_id: int,
+    req: DietitianReportUpdate,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    report = db.query(DietitianReport).filter(
+        DietitianReport.id == report_id,
+        DietitianReport.household_id == household.id
+    ).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe de dietista no encontrado")
+
+    if req.title is not None:
+        report.title = req.title.strip()
+    if req.patient_name is not None:
+        report.patient_name = req.patient_name.strip()
+    if req.target_calories is not None:
+        report.target_calories = req.target_calories
+    if req.dietary_goal is not None:
+        report.dietary_goal = req.dietary_goal.strip()
+    if req.habits is not None:
+        report.habits = req.habits.strip()
+    if req.dietary_guidelines is not None:
+        report.dietary_guidelines = json.dumps(req.dietary_guidelines, ensure_ascii=False)
+    if req.preferred_foods is not None:
+        report.preferred_foods = req.preferred_foods.strip()
+    if req.excluded_foods is not None:
+        report.excluded_foods = req.excluded_foods.strip()
+    if req.notes is not None:
+        report.notes = req.notes.strip()
+    if req.is_active is not None:
+        if req.is_active:
+            db.query(DietitianReport).filter(
+                DietitianReport.household_id == household.id,
+                DietitianReport.id != report.id
+            ).update({"is_active": False})
+        report.is_active = req.is_active
+
+    report.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(report)
+
+    return _format_report_response(report, db)
+
+
+@router.delete("/reports/{report_id}")
+def delete_dietitian_report(
+    report_id: int,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    report = db.query(DietitianReport).filter(
+        DietitianReport.id == report_id,
+        DietitianReport.household_id == household.id
+    ).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
+
+    db.delete(report)
+    db.commit()
+    return {"message": "Informe de dietista eliminado correctamente"}
+
+
+@router.post("/reports/{report_id}/apply-to-week")
+def apply_report_to_week(
+    report_id: int,
+    req: ApplyReportToWeekRequest,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    """
+    Applies the proposed weekly menu from the dietitian report to a chosen calendar week.
+    Creates or reuses the MealPlan for that Monday-Sunday week and populates slots.
+    """
+    report = db.query(DietitianReport).filter(
+        DietitianReport.id == report_id,
+        DietitianReport.household_id == household.id
+    ).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
+
+    try:
+        target_date = datetime.strptime(req.target_start_date, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido. Utilice AAAA-MM-DD")
+
+    monday = target_date - timedelta(days=target_date.weekday())
+    sunday = monday + timedelta(days=6)
+    servings = req.household_servings or report.household_servings or 2
+
+    plan = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date == monday
+    ).first()
+
+    if not plan:
+        plan = MealPlan(
+            household_id=household.id,
+            title=f"{report.title} ({monday.strftime('%d/%m')} - {sunday.strftime('%d/%m')})",
+            start_date=monday,
+            end_date=sunday,
+            is_template=False
+        )
+        db.add(plan)
+        db.flush()
+
+    days_data = []
+    if report.raw_plan_data:
+        try:
+            days_data = json.loads(report.raw_plan_data)
+        except Exception:
+            days_data = []
+
+    day_offsets = {
+        "lunes": 0, "martes": 1, "miercoles": 2, "miércoles": 2,
+        "jueves": 3, "viernes": 4, "sabado": 5, "sábado": 5, "domingo": 6
+    }
+
+    planned_count = 0
+    for idx, d in enumerate(days_data):
+        d_name = str(d.get("day_name", "")).strip().lower()
+        offset = day_offsets.get(d_name, idx if idx < 7 else 6)
+        slot_date = monday + timedelta(days=offset)
+
+        for m in d.get("meals", []):
+            m_type = str(m.get("meal_type", "comida")).strip().lower()
+            if m_type not in ["desayuno", "almuerzo", "comida", "merienda", "cena", "snacks"]:
+                m_type = "comida"
+
+            slot = db.query(MealSlot).filter(
+                MealSlot.meal_plan_id == plan.id,
+                MealSlot.slot_date == slot_date,
+                MealSlot.meal_type == m_type
+            ).first()
+
+            if not slot:
+                slot = MealSlot(
+                    meal_plan_id=plan.id,
+                    slot_date=slot_date,
+                    meal_type=m_type,
+                    servings=servings
+                )
+                db.add(slot)
+                db.flush()
+
+            rec_id = m.get("recipe_id")
+            if not rec_id and m.get("title"):
+                found_rec = db.query(Recipe).filter(
+                    Recipe.title.ilike(f"%{m.get('title').strip()}%"),
+                    Recipe.review_status == "approved"
+                ).first()
+                if found_rec:
+                    rec_id = found_rec.id
+
+            planned = PlannedRecipe(
+                meal_slot_id=slot.id,
+                recipe_id=rec_id,
+                custom_recipe_name=m.get("title") if not rec_id else None,
+                custom_calories=m.get("calories"),
+                servings=servings
+            )
+            db.add(planned)
+            planned_count += 1
+
+    db.commit()
+    db.refresh(plan)
+
+    return {
+        "message": f"Menú del informe aplicado con éxito para la semana del {monday.strftime('%d/%m/%Y')}.",
+        "meal_plan_id": plan.id,
+        "start_date": str(monday),
+        "end_date": str(sunday),
+        "meals_planned": planned_count
+    }
+
+
+@router.get("/daily-tip")
+def get_daily_tip(
+    seed: Optional[int] = None,
+    household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns a smart rotating tip or guideline for the home page.
+    Uses guidelines from the active dietitian report if available;
+    otherwise uses habits from profile or Mediterranean guidelines.
+    """
+    report = db.query(DietitianReport).filter(
+        DietitianReport.household_id == household.id,
+        DietitianReport.is_active == True
+    ).order_by(DietitianReport.created_at.desc()).first()
+
+    if not report:
+        report = db.query(DietitianReport).filter(
+            DietitianReport.household_id == household.id
+        ).order_by(DietitianReport.created_at.desc()).first()
+
+    tips = []
+    report_title = None
+    report_id = None
+    patient_name = None
+
+    if report:
+        report_title = report.title
+        report_id = report.id
+        patient_name = report.patient_name
+        if report.dietary_guidelines:
+            try:
+                parsed = json.loads(report.dietary_guidelines)
+                if isinstance(parsed, list):
+                    tips.extend([str(t).strip() for t in parsed if str(t).strip()])
+            except Exception:
+                pass
+        if not tips and report.habits:
+            tips.extend([h.strip() for h in report.habits.split("\n") if len(h.strip()) > 5])
+
+    if not tips:
+        prof = db.query(NutritionProfile).filter(NutritionProfile.user_id == current_user.id).first()
+        if prof and prof.cooking_habits:
+            tips.extend([h.strip() for h in prof.cooking_habits.split("\n") if len(h.strip()) > 5])
+
+    if not tips:
+        tips = [
+            "Prioriza verduras frescas o al vapor en la comida y la cena.",
+            "Mantente hidratado: bebe un vaso de agua antes de cada comida principal.",
+            "Elige aceite de oliva virgen extra (AOVE) en crudo como grasa principal.",
+            "Incorpora legumbres al menos 3 veces por semana como fuente de proteína y fibra.",
+            "Cena ligero al menos 2 horas antes de acostarte para favorecer el descanso digestivo.",
+            "Opta por piezas de fruta fresca entera en vez de zumos industriales.",
+            "Utiliza especias y hierbas aromáticas para potenciar el sabor y reducir el uso de sal.",
+            "Planifica tus tuppers y batch cooking con antelación para no recurrir a ultraprocesados."
+        ]
+
+    if seed is not None:
+        idx = seed % len(tips)
+    else:
+        day_of_year = datetime.utcnow().timetuple().tm_yday
+        idx = day_of_year % len(tips)
+
+    return {
+        "tip": tips[idx],
+        "index": idx,
+        "total_tips": len(tips),
+        "all_tips": tips,
+        "has_dietitian_report": report is not None,
+        "report_id": report_id,
+        "report_title": report_title,
+        "patient_name": patient_name,
+        "source": "dietitian_report" if report else "general_mediterranean"
     }

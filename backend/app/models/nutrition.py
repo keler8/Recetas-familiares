@@ -42,3 +42,31 @@ class NutritionConsent(Base):
     revoked_date = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="nutrition_consent")
+
+
+class DietitianReport(Base):
+    __tablename__ = "dietitian_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    diner_id = Column(Integer, ForeignKey("diners.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(200), default="Informe de Nutricionista", nullable=False)
+    patient_name = Column(String(150), nullable=True)
+    target_calories = Column(Integer, nullable=True)
+    dietary_goal = Column(String(100), nullable=True)
+    habits = Column(Text, nullable=True)
+    dietary_guidelines = Column(Text, nullable=True)  # JSON string list of guidelines/tips
+    preferred_foods = Column(Text, nullable=True)
+    excluded_foods = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    raw_plan_data = Column(Text, nullable=True)  # JSON string list of days/meals
+    created_recipes_ids = Column(Text, nullable=True)  # JSON string list of recipe IDs
+    household_servings = Column(Integer, default=2, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    household = relationship("Household")
+    user = relationship("User")
+    diner = relationship("Diner")

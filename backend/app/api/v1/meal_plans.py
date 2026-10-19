@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
@@ -9,7 +10,9 @@ from app.models.auth import User
 from app.models.household import Household
 from app.models.recipe import Recipe, RecipeVariant, RecipeIngredient, RecipeStep
 from app.models.meal_plan import MealPlan, MealSlot, PlannedRecipe, Leftover
-from app.models.nutrition import NutritionProfile
+from app.models.nutrition import NutritionProfile, DietitianReport
+
+logger = logging.getLogger(__name__)
 from app.schemas.meal_plan import (
     MealPlanCreate, MealPlanResponse, AddRecipeToSlotRequest,
     AiMenuGenerateRequest, LeftoverCreate, LeftoverResponse,
@@ -1021,13 +1024,55 @@ def apply_imported_nutrition_plan(
             )
             db.add(planned)
 
+    # 3. Create or update DietitianReport entity so it's always accessible in /nutrition and Home
+    new_report_id = None
+    try:
+        # Mark previous active reports as inactive for this household
+        db.query(DietitianReport).filter(
+            DietitianReport.household_id == household.id,
+            DietitianReport.is_active == True
+        ).update({"is_active": False})
+
+        # Collect all recipe IDs linked/created
+        all_linked_recipe_ids = list(set(
+            [m.recipe_id for d in req.days for m in d.meals if m.recipe_id] +
+            list(created_recipes_cache.values())
+        ))
+
+        raw_days = [d.model_dump() for d in req.days]
+
+        report = DietitianReport(
+            household_id=household.id,
+            user_id=current_user.id,
+            diner_id=req.target_diner_id,
+            title=req.plan_title or f"Informe Nutricional ({start_date.strftime('%d/%m/%Y')})",
+            patient_name=req.patient_name,
+            target_calories=req.target_calories,
+            dietary_goal=req.dietary_goal,
+            habits=req.habits,
+            dietary_guidelines=json.dumps(req.dietary_guidelines or [], ensure_ascii=False),
+            preferred_foods=req.preferred_foods,
+            excluded_foods=req.excluded_foods,
+            notes=req.notes,
+            raw_plan_data=json.dumps(raw_days, ensure_ascii=False, default=str),
+            created_recipes_ids=json.dumps(all_linked_recipe_ids, ensure_ascii=False),
+            household_servings=household_servings,
+            is_active=True
+        )
+        db.add(report)
+        db.flush()
+        new_report_id = report.id
+    except Exception as e:
+        logger.error(f"Error saving DietitianReport: {e}")
+
     db.commit()
     db.refresh(plan)
 
     return {
         "message": f"Plan nutricional aplicado con éxito. Se planificaron {len(req.days)} días adaptados para {household_servings} raciones.",
         "meal_plan_id": plan.id,
-        "recipes_created": recipes_created_count
+        "recipes_created": recipes_created_count,
+        "report_id": new_report_id
     }
 
 

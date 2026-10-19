@@ -166,6 +166,7 @@ class ApplyNutritionPlanRequest(BaseModel):
     target_calories: Optional[int] = None
     dietary_goal: Optional[str] = None
     habits: Optional[str] = None
+    dietary_guidelines: List[str] = []
     preferred_foods: Optional[str] = None
     excluded_foods: Optional[str] = None
     notes: Optional[str] = None

@@ -10,7 +10,7 @@ from app.models.meal_plan import MealPlan, MealSlot, PlannedRecipe, Leftover
 from app.models.pantry_shopping import (
     PantryItem, PantryMovement, ShoppingList, ShoppingItem, Receipt, ReceiptLine, PriceHistory
 )
-from app.models.nutrition import NutritionProfile, NutritionConsent
+from app.models.nutrition import NutritionProfile, NutritionConsent, DietitianReport
 from app.models.system import IntegrationConnection, Notification, BackupJob, SystemSetting
 
 __all__ = [
@@ -50,6 +50,7 @@ __all__ = [
     "PriceHistory",
     "NutritionProfile",
     "NutritionConsent",
+    "DietitianReport",
     "IntegrationConnection",
     "Notification",
     "BackupJob",

@@ -57,3 +57,60 @@ class NutritionConsentRequest(BaseModel):
 class NutritionAdviceRequest(BaseModel):
     query: str
     target_recipe_id: Optional[int] = None
+
+
+class DietitianReportUpdate(BaseModel):
+    title: Optional[str] = None
+    patient_name: Optional[str] = None
+    target_calories: Optional[int] = None
+    dietary_goal: Optional[str] = None
+    habits: Optional[str] = None
+    dietary_guidelines: Optional[List[str]] = None
+    preferred_foods: Optional[str] = None
+    excluded_foods: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class DietitianReportRecipeItem(BaseModel):
+    id: int
+    title: str
+    image_url: Optional[str] = None
+    prep_time_min: Optional[int] = None
+    cook_time_min: Optional[int] = None
+    nutrition_calories: Optional[int] = None
+    difficulty: Optional[str] = None
+    dish_type: Optional[str] = None
+    categories: Optional[List[str]] = []
+    is_private: Optional[bool] = False
+
+
+class DietitianReportResponse(BaseModel):
+    id: int
+    household_id: int
+    user_id: Optional[int] = None
+    diner_id: Optional[int] = None
+    title: str
+    patient_name: Optional[str] = None
+    target_calories: Optional[int] = None
+    dietary_goal: Optional[str] = None
+    habits: Optional[str] = None
+    dietary_guidelines: List[str] = []
+    preferred_foods: Optional[str] = None
+    excluded_foods: Optional[str] = None
+    notes: Optional[str] = None
+    raw_plan_data: Optional[List[dict]] = []
+    created_recipes_ids: List[int] = []
+    recipes: List[DietitianReportRecipeItem] = []
+    household_servings: int = 2
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ApplyReportToWeekRequest(BaseModel):
+    target_start_date: str  # YYYY-MM-DD
+    household_servings: Optional[int] = None

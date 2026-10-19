@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Sparkles, ArrowRight, Calendar, Heart, Clock, ChefHat,
   SlidersHorizontal, Check, Utensils, Apple, Coffee, Sun,
-  Flame, Plus, Play, RefreshCw, X, Bot
+  Flame, Plus, Play, RefreshCw, X, Bot, Lightbulb, RotateCw, FileText
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -49,6 +49,8 @@ export const HomePage: React.FC = () => {
   const [recentRecipes, setRecentRecipes] = useState<any[]>([]);
   const [favoriteRecipes, setFavoriteRecipes] = useState<any[]>([]);
   const [nutritionProfile, setNutritionProfile] = useState<any>(null);
+  const [dailyTip, setDailyTip] = useState<any>(null);
+  const [tipIndex, setTipIndex] = useState<number>(0);
   const [loading, setLoading] = useState(true);
 
   // Day name in Spanish
@@ -67,15 +69,16 @@ export const HomePage: React.FC = () => {
       }
     }).catch(() => null);
 
-    // 2. Load active meal plan for today, latest recipes, favorites and nutrition profile
+    // 2. Load active meal plan for today, latest recipes, favorites, nutrition profile and daily tip
     const loadHomeData = async () => {
       setLoading(true);
       try {
-        const [planRes, recipesRes, favsRes, profRes] = await Promise.all([
+        const [planRes, recipesRes, favsRes, profRes, tipRes] = await Promise.all([
           apiRequest('/meal-plans/active').catch(() => null),
           apiRequest('/recipes?limit=4').catch(() => []),
           apiRequest('/recipes?favorites_only=true&limit=4').catch(() => []),
-          apiRequest('/nutrition/profile').catch(() => null)
+          apiRequest('/nutrition/profile').catch(() => null),
+          apiRequest('/nutrition/daily-tip').catch(() => null)
         ]);
 
         if (planRes && planRes.items) {
@@ -96,6 +99,11 @@ export const HomePage: React.FC = () => {
         if (profRes) {
           setNutritionProfile(profRes);
         }
+
+        if (tipRes) {
+          setDailyTip(tipRes);
+          setTipIndex(tipRes.index || 0);
+        }
       } catch (err) {
         console.warn('Home fetch error:', err);
       } finally {
@@ -105,6 +113,12 @@ export const HomePage: React.FC = () => {
 
     loadHomeData();
   }, [todayName]);
+
+  const handleRotateTip = () => {
+    if (!dailyTip || !dailyTip.all_tips || dailyTip.all_tips.length <= 1) return;
+    const nextIdx = (tipIndex + 1) % dailyTip.all_tips.length;
+    setTipIndex(nextIdx);
+  };
 
   const toggleFav = async (e: React.MouseEvent, recipeId: number) => {
     e.preventDefault();
@@ -216,35 +230,65 @@ export const HomePage: React.FC = () => {
         </Link>
       </div>
 
-      {/* Widget 1: Tips de mi Alimentación & Asistente Dietético */}
+      {/* Widget 1: Tips de mi Alimentación & Consejos del Dietista */}
       {widgets.showDietAssistant && (
-        <section className="p-5 sm:p-6 rounded-3xl bg-gradient-to-br from-emerald-500/10 via-white dark:via-zinc-900 to-emerald-500/5 dark:to-zinc-900 border border-emerald-500/30 space-y-4 shadow-sm">
+        <section className={`p-5 sm:p-6 rounded-3xl border space-y-4 shadow-sm transition-all ${
+          dailyTip?.has_dietitian_report
+            ? 'bg-gradient-to-br from-amber-500/10 via-white dark:via-zinc-900 to-amber-500/5 dark:to-zinc-900 border-amber-500/30'
+            : 'bg-gradient-to-br from-emerald-500/10 via-white dark:via-zinc-900 to-emerald-500/5 dark:to-zinc-900 border-emerald-500/30'
+        }`}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
-                <Heart className="w-5 h-5" />
+              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border ${
+                dailyTip?.has_dietitian_report
+                  ? 'bg-amber-500/20 border-amber-500/30 text-amber-600 dark:text-amber-400'
+                  : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+              }`}>
+                {dailyTip?.has_dietitian_report ? (
+                  <Lightbulb className="w-5 h-5 fill-amber-500/20" />
+                ) : (
+                  <Heart className="w-5 h-5" />
+                )}
               </div>
               <div>
-                <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  Tips de mi Alimentación
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
-                    Asistente Dietético
-                  </span>
+                <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+                  {dailyTip?.has_dietitian_report ? (
+                    <>
+                      <span>Pautas de tu Dietista</span>
+                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                        Informe Activo
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Tips de mi Alimentación</span>
+                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                        Asistente Dietético
+                      </span>
+                    </>
+                  )}
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-zinc-400">
-                  {nutritionProfile?.dietary_goals
-                    ? `Enfoque activo: ${nutritionProfile.dietary_goals}`
-                    : 'Nutrición preventiva, hábitos saludables y adaptación de tus platos'}
+                  {dailyTip?.has_dietitian_report ? (
+                    <span>
+                      Siguiendo: <strong>{dailyTip.report_title}</strong> {dailyTip.patient_name ? `(${dailyTip.patient_name})` : ''}
+                    </span>
+                  ) : (
+                    nutritionProfile?.dietary_goals
+                      ? `Enfoque activo: ${nutritionProfile.dietary_goals}`
+                      : 'Nutrición preventiva, hábitos saludables y adaptación de tus platos'
+                  )}
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+            <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 flex-wrap">
               <Link
                 to="/nutrition"
-                className="px-3 py-2 rounded-2xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-semibold transition-colors"
+                className="px-3 py-2 rounded-2xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-semibold transition-colors flex items-center gap-1.5"
               >
-                Mis Hábitos
+                <FileText className="w-3.5 h-3.5 text-amber-500" />
+                <span>{dailyTip?.has_dietitian_report ? 'Ver Informe Completo' : 'Mi Alimentación'}</span>
               </Link>
               <button
                 type="button"
@@ -258,14 +302,40 @@ export const HomePage: React.FC = () => {
           </div>
 
           {/* Daily Quick Tip Banner */}
-          <div className="p-3.5 sm:p-4 rounded-2xl bg-white/80 dark:bg-zinc-950/70 border border-emerald-500/25 flex items-start gap-3 shadow-xs">
-            <Flame className="w-4 h-4 text-emerald-500 dark:text-emerald-400 mt-0.5 shrink-0" />
-            <div className="text-xs text-slate-700 dark:text-zinc-300 leading-relaxed">
-              <strong className="text-emerald-700 dark:text-emerald-400">Consejo culinario de hoy: </strong>
-              {nutritionProfile?.available_time_min && nutritionProfile.available_time_min <= 25
-                ? `Para tu meta de recetas rápidas (<${nutritionProfile.available_time_min}m), aprovecha el salteado en wok o asado rápido en Airfryer a 190°C con pulverización de AOVE para conservar texturas y ahorrar tiempo.`
-                : 'Prioriza técnicas de cocción al vapor (Thermomix Varoma) o tostado con aire (Airfryer a 180°C con pulverización de AOVE) para reducir grasas saturadas conservando aromas y vitaminas naturales.'}
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-white/90 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <div className="w-7 h-7 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0 mt-0.5">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div className="text-xs text-slate-700 dark:text-zinc-200 leading-relaxed min-w-0">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <strong className={dailyTip?.has_dietitian_report ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-emerald-700 dark:text-emerald-400 font-bold'}>
+                    {dailyTip?.has_dietitian_report ? 'Pauta del día:' : 'Consejo de hoy:'}
+                  </strong>
+                  {dailyTip?.all_tips && dailyTip.all_tips.length > 1 && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400">
+                      Pauta {tipIndex + 1} de {dailyTip.all_tips.length}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-800 dark:text-zinc-200 font-medium italic">
+                  «{dailyTip?.all_tips?.[tipIndex] || dailyTip?.tip || 'Mantén una hidratación constante y prioriza vegetales frescos en cada comida.'}»
+                </p>
+              </div>
             </div>
+
+            {/* Rotating / Change tip button */}
+            {dailyTip?.all_tips && dailyTip.all_tips.length > 1 && (
+              <button
+                type="button"
+                onClick={handleRotateTip}
+                className="self-end sm:self-center px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 border border-slate-200 dark:border-zinc-800"
+                title="Mostrar otra pauta del informe"
+              >
+                <RotateCw className="w-3.5 h-3.5 text-amber-500" />
+                <span>Otro consejo</span>
+              </button>
+            )}
           </div>
         </section>
       )}

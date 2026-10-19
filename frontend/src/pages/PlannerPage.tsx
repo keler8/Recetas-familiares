@@ -588,6 +588,9 @@ export const PlannerPage: React.FC = () => {
           target_calories: patientCalories ? Number(patientCalories) : null,
           dietary_goal: patientGoal,
           habits: patientHabits || null,
+          dietary_guidelines: parsedPlan.dietary_guidelines || [],
+          preferred_foods: parsedPlan.preferred_foods || null,
+          excluded_foods: parsedPlan.excluded_foods || null,
           notes: parsedPlan.notes,
           days: parsedPlan.days
         })
