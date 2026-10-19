@@ -923,32 +923,6 @@ export const ImportCenterPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Dietitian Report Importer Card */}
-      <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-zinc-900 border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-            <FileText className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              Importar Informe de Dietista / Plan Nutricional
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-zinc-950 uppercase tracking-wider">
-                OCR & Hábitos IA
-              </span>
-            </h3>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Escanea una pauta médica o PDF: extrae hábitos y calorías, y adapta las raciones para cocinar en el hogar.
-            </p>
-          </div>
-        </div>
-        <Link
-          to="/planner?scan=diet"
-          className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-md shadow-amber-500/20 shrink-0 self-start sm:self-auto"
-        >
-          <Sparkles className="w-3.5 h-3.5 fill-zinc-950" />
-          <span>Escanear Informe</span>
-        </Link>
-      </div>
 
       {/* Batch Selector if multiple batches exist */}
       {batches.length > 1 && (

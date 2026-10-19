@@ -201,6 +201,33 @@ def get_nutrition_advice(
     preferred_foods = profile.preferred_foods if profile else None
     excluded_foods = profile.excluded_foods if profile else None
 
+    # Check active dietitian report
+    active_rep = db.query(DietitianReport).filter(
+        DietitianReport.user_id == current_user.id,
+        DietitianReport.is_active == True
+    ).order_by(DietitianReport.created_at.desc()).first()
+    if not active_rep and current_user.memberships:
+        user_h = current_user.memberships[0].household_id
+        active_rep = db.query(DietitianReport).filter(
+            DietitianReport.household_id == user_h,
+            DietitianReport.is_active == True
+        ).order_by(DietitianReport.created_at.desc()).first()
+
+    if active_rep:
+        rep_guidelines = ""
+        if active_rep.dietary_guidelines:
+            try:
+                g_list = json.loads(active_rep.dietary_guidelines)
+                if isinstance(g_list, list):
+                    rep_guidelines = " Pautas clínicas: " + "; ".join(g_list)
+            except Exception:
+                rep_guidelines = f" Pautas clínicas: {active_rep.dietary_guidelines}"
+        dietary_goals = f"{active_rep.dietary_goal or dietary_goals}. Objetivo calórico diario: {active_rep.target_calories or 'no especificado'} kcal.{rep_guidelines}"
+        if active_rep.preferred_foods:
+            preferred_foods = f"{preferred_foods or ''}, {active_rep.preferred_foods}".strip(", ")
+        if active_rep.excluded_foods:
+            excluded_foods = f"{excluded_foods or ''}, {active_rep.excluded_foods}".strip(", ")
+
     recipe_data = None
     if req.target_recipe_id:
         rec = db.query(Recipe).filter(Recipe.id == req.target_recipe_id).first()
@@ -580,14 +607,41 @@ def update_report_version(
     Updates a dietitian report by either appending a new revision (version 2, new week of menu, additional recipes, extra tips)
     or replacing the report contents entirely.
     """
-    report = db.query(DietitianReport).filter(
-        DietitianReport.id == report_id,
-        DietitianReport.household_id == household.id
-    ).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Informe no encontrado")
+    report = None
+    if report_id > 0:
+        report = db.query(DietitianReport).filter(
+            DietitianReport.id == report_id,
+            DietitianReport.household_id == household.id
+        ).first()
 
-    servings = req.household_servings or report.household_servings or 2
+    servings = req.household_servings or (report.household_servings if report else 2) or 2
+
+    if not report:
+        # Deactivate previous active reports for this household
+        db.query(DietitianReport).filter(
+            DietitianReport.household_id == household.id,
+            DietitianReport.is_active == True
+        ).update({"is_active": False})
+
+        report = DietitianReport(
+            household_id=household.id,
+            user_id=current_user.id,
+            title=req.week_title or f"Informe Nutricional ({datetime.utcnow().strftime('%d/%m/%Y')})",
+            target_calories=req.target_calories,
+            dietary_goal=req.dietary_goal,
+            habits=req.habits,
+            dietary_guidelines=json.dumps(req.new_guidelines or [], ensure_ascii=False),
+            preferred_foods=req.preferred_foods,
+            excluded_foods=req.excluded_foods,
+            notes=req.notes,
+            raw_plan_data="[]",
+            created_recipes_ids="[]",
+            household_servings=servings,
+            version=1,
+            is_active=True
+        )
+        db.add(report)
+        db.flush()
 
     # 1. Create missing recipes if requested
     created_recipes_cache = {}
@@ -784,6 +838,156 @@ def update_report_version(
             report.excluded_foods = f"{report.excluded_foods or ''}, {req.excluded_foods}".strip(", ")
 
     report.household_servings = servings
+    report.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(report)
+
+    return _format_report_response(report, db)
+
+
+@router.post("/reports/{report_id}/sync-recipes", response_model=DietitianReportResponse)
+def sync_report_recipes_to_private(
+    report_id: int,
+    household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Scans all meals in the report's raw plan data. Any meal without an existing recipe is created
+    as a private recipe (is_private=True) with an authentic AI-searched image, AI tips, and nutrition macros,
+    and linked to the report.
+    """
+    report = db.query(DietitianReport).filter(
+        DietitianReport.id == report_id,
+        DietitianReport.household_id == household.id
+    ).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
+
+    current_rec_ids = []
+    if report.created_recipes_ids:
+        try:
+            current_rec_ids = json.loads(report.created_recipes_ids)
+        except Exception:
+            current_rec_ids = []
+
+    servings = report.household_servings or 2
+    raw_days = []
+    if report.raw_plan_data:
+        try:
+            raw_days = json.loads(report.raw_plan_data)
+        except Exception:
+            raw_days = []
+
+    new_ids = list(current_rec_ids)
+    modified = False
+
+    for day in raw_days:
+        for meal in day.get("meals", []):
+            rec_id = meal.get("recipe_id")
+            title = str(meal.get("title", "")).strip()
+            if not title:
+                continue
+
+            existing = None
+            if rec_id:
+                existing = db.query(Recipe).filter(Recipe.id == rec_id).first()
+            if not existing:
+                existing = db.query(Recipe).filter(
+                    Recipe.title.ilike(title),
+                    or_(Recipe.created_by_id == current_user.id, Recipe.is_private == False)
+                ).first()
+
+            if existing:
+                if existing.id not in new_ids:
+                    new_ids.append(existing.id)
+                meal["recipe_id"] = existing.id
+            else:
+                dish_type = "Plato principal"
+                meal_type_val = meal.get("meal_type", "comida")
+                if meal_type_val in ["desayuno", "almuerzo"]:
+                    dish_type = "Desayuno / Merienda"
+                elif meal_type_val == "merienda":
+                    dish_type = "Entrante / Aperitivo"
+
+                img_url = gemini_service.generate_or_find_recipe_image(title, dish_type)
+
+                new_rec = Recipe(
+                    title=title,
+                    description=f"Receta pautada en el informe de nutrición '{report.title}'. Adaptada para {servings} raciones.",
+                    main_image_url=img_url,
+                    meal_type=meal_type_val,
+                    dish_type=dish_type,
+                    cuisine="Mediterránea",
+                    prep_time_min=15,
+                    cook_time_min=20,
+                    total_time_min=35,
+                    difficulty="facil",
+                    base_servings=servings,
+                    review_status="approved",
+                    is_private=True,
+                    created_by_id=current_user.id
+                )
+                db.add(new_rec)
+                db.flush()
+
+                variant = RecipeVariant(
+                    recipe_id=new_rec.id,
+                    variant_type="traditional",
+                    title="Preparación tradicional saludable",
+                    is_default=True
+                )
+                db.add(variant)
+                db.flush()
+
+                ing_names = []
+                ing_lines = []
+                for idx_ing, ing in enumerate(meal.get("ingredients", [])):
+                    name = ing.get("name", "") if isinstance(ing, dict) else str(ing)
+                    ing_names.append(name)
+                    amt = ing.get("amount") if isinstance(ing, dict) else None
+                    unit = ing.get("unit") if isinstance(ing, dict) else ""
+                    scaled_amt = round(float(amt) * servings, 2) if amt is not None else None
+                    ing_lines.append(f"{scaled_amt or ''} {unit or ''} {name}".strip())
+                    db.add(RecipeIngredient(
+                        variant_id=variant.id,
+                        name=name,
+                        amount=scaled_amt,
+                        unit=unit,
+                        order_index=idx_ing
+                    ))
+
+                db.add(RecipeStep(
+                    variant_id=variant.id,
+                    step_number=1,
+                    instruction=f"Preparar los ingredientes según las pautas de tu informe nutricional y cocinar de forma saludable para {servings} raciones."
+                ))
+
+                if ing_names:
+                    try:
+                        tips = gemini_service.suggest_recipe_tips(title, ing_names, dish_type)
+                        if tips.get("chef_notes"): new_rec.chef_notes = tips["chef_notes"]
+                        if tips.get("preservation_tips"): new_rec.preservation_tips = tips["preservation_tips"]
+                        if tips.get("freezing_tips"): new_rec.freezing_tips = tips["freezing_tips"]
+                        if tips.get("reheating_tips"): new_rec.reheating_tips = tips["reheating_tips"]
+
+                        nut = gemini_service.estimate_recipe_nutrition(title, ing_lines, base_servings=servings, dish_type=dish_type)
+                        if nut:
+                            if nut.get("calories"): new_rec.nutrition_calories = nut["calories"]
+                            if nut.get("protein") is not None: new_rec.nutrition_protein = nut["protein"]
+                            if nut.get("carbs") is not None: new_rec.nutrition_carbs = nut["carbs"]
+                            if nut.get("fat") is not None: new_rec.nutrition_fat = nut["fat"]
+                    except Exception as e:
+                        logger.warning(f"Error enriching synced recipe: {e}")
+
+                db.flush()
+                meal["recipe_id"] = new_rec.id
+                new_ids.append(new_rec.id)
+                modified = True
+
+    report.created_recipes_ids = json.dumps(list(set(new_ids)), ensure_ascii=False)
+    if modified:
+        report.raw_plan_data = json.dumps(raw_days, ensure_ascii=False)
     report.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(report)

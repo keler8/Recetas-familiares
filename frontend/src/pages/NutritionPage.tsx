@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Heart, Sparkles, Shield, AlertCircle, Save, Check,
   Bot, Utensils, Flame, Clock, Zap, ChefHat, Users,
   ArrowRight, CheckCircle2, Sliders, ThumbsUp, ThumbsDown,
   Dumbbell, Target, Calculator, Plus, Trash2, Edit2, X, Activity, FileText,
   Calendar, RotateCw, Lightbulb, BookOpen, ChevronRight, Send, Eye, CheckSquare,
-  UploadCloud, Camera, RefreshCw, PlusCircle, Layers, Lock, Unlock
+  UploadCloud, Camera, RefreshCw, PlusCircle, Layers, Lock, Unlock, Table, LayoutGrid
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -22,6 +22,30 @@ export const NutritionPage: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [showDietModal, setShowDietModal] = useState(false);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [mainTab, setMainTab] = useState<'general' | 'report'>(() => 
+    searchParams.get('tab') === 'report' ? 'report' : 'general'
+  );
+  const [menuViewMode, setMenuViewMode] = useState<'grid' | 'cards'>('grid');
+  const [isSyncingRecipes, setIsSyncingRecipes] = useState(false);
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'report' && mainTab !== 'report') {
+      setMainTab('report');
+    } else if (tabParam === 'general' && mainTab !== 'general') {
+      setMainTab('general');
+    }
+  }, [searchParams]);
+
+  const switchMainTab = (newTab: 'general' | 'report') => {
+    setMainTab(newTab);
+    setSearchParams(prev => {
+      prev.set('tab', newTab);
+      return prev;
+    });
+  };
 
   // Active Dietitian Report State
   const [activeReport, setActiveReport] = useState<any | null>(null);
@@ -402,17 +426,32 @@ export const NutritionPage: React.FC = () => {
     }
   };
 
+  const handleSyncRecipes = async () => {
+    if (!activeReport) return;
+    setIsSyncingRecipes(true);
+    try {
+      const res = await apiRequest(`/nutrition/reports/${activeReport.id}/sync-recipes`, { method: 'POST' });
+      setActiveReport(res);
+      alert('¡Todas las recetas del menú semanal han sido añadidas a tu cajón privado con sus fotos e información nutricional revisadas con IA!');
+    } catch (err: any) {
+      alert(`Error al sincronizar recetas: ${err.message || err}`);
+    } finally {
+      setIsSyncingRecipes(false);
+    }
+  };
+
   const handleSaveUpdateVersion = async () => {
-    if (!activeReport || !parsedUpdatePlan) return;
+    if (!parsedUpdatePlan) return;
     setIsSavingUpdateVersion(true);
     try {
-      const updated = await apiRequest(`/nutrition/reports/${activeReport.id}/update-version`, {
+      const reportId = activeReport?.id || 0;
+      const updated = await apiRequest(`/nutrition/reports/${reportId}/update-version`, {
         method: 'POST',
         body: JSON.stringify({
           mode: updateMode,
           week_title: updateWeekTitle,
           create_missing_recipes: true,
-          household_servings: activeReport.household_servings || 2,
+          household_servings: activeReport?.household_servings || 2,
           target_calories: updateTargetCalories ? Number(updateTargetCalories) : null,
           dietary_goal: updateDietaryGoal || null,
           habits: updateHabits || null,
@@ -433,7 +472,7 @@ export const NutritionPage: React.FC = () => {
       setUpdateSuccessToast(
         updateMode === 'append'
           ? `¡Actualización completada con éxito! Se añadió la nueva semana (versión ${updated.version || 2}) y los nuevos tips revisados.`
-          : `¡Informe reemplazado con éxito!`
+          : `¡Informe guardado con éxito!`
       );
       setTimeout(() => setUpdateSuccessToast(null), 5000);
 
@@ -444,7 +483,7 @@ export const NutritionPage: React.FC = () => {
       setUpdatePreview(null);
       setUpdateAnalysisError(null);
     } catch (err: any) {
-      alert(err.message || 'Error al guardar la actualización');
+      alert(err.message || 'Error al guardar el informe');
     } finally {
       setIsSavingUpdateVersion(false);
     }
@@ -669,15 +708,56 @@ export const NutritionPage: React.FC = () => {
         </button>
       </div>
 
+      {/* Main Tabs Navigation: Pautas Generales vs Informe de Dietista */}
+      <div className="flex items-center gap-2 p-1.5 bg-slate-100 dark:bg-zinc-900 rounded-2xl border border-slate-200 dark:border-zinc-800">
+        <button
+          type="button"
+          onClick={() => switchMainTab('general')}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs sm:text-sm font-black transition-all ${
+            mainTab === 'general'
+              ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/80 dark:border-zinc-700'
+              : 'text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white'
+          }`}
+        >
+          <Sliders className="w-4 h-4 text-emerald-500" />
+          <span>⚙️ Pautas Generales y Familia</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => switchMainTab('report')}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs sm:text-sm font-black transition-all ${
+            mainTab === 'report'
+              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-zinc-950 shadow-md shadow-amber-500/20'
+              : 'text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-white'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>📋 Informe de Nutricionista</span>
+          {activeReport ? (
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+              mainTab === 'report' ? 'bg-zinc-950/20 text-zinc-950' : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+            }`}>
+              v{activeReport.version || 1} Activo
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-zinc-400">
+              Sin informe
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* Dietitian Report Section */}
-      {activeReport ? (
-        <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-zinc-900 border-2 border-amber-500/30 space-y-5 shadow-sm relative overflow-hidden">
-          {/* Header */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30 shadow-inner">
-                <FileText className="w-6 h-6" />
-              </div>
+      {mainTab === 'report' && (
+        activeReport ? (
+          <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-zinc-900 border-2 border-amber-500/30 space-y-5 shadow-sm relative overflow-hidden">
+            {/* Header */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30 shadow-inner">
+                  <FileText className="w-6 h-6" />
+                </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-zinc-950 uppercase tracking-wider flex items-center gap-1">
@@ -721,16 +801,16 @@ export const NutritionPage: React.FC = () => {
                 title="Añadir nueva consulta/semana manteniendo el historial y pautas anteriores"
               >
                 <PlusCircle className="w-4 h-4" />
-                <span>Añadir Actualización (v{(activeReport.version || 1) + 1})</span>
+                <span>Actualizar Informe (v{(activeReport.version || 1) + 1})</span>
               </button>
               <button
                 type="button"
                 onClick={() => handleOpenUpdateModal('replace')}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 font-bold text-xs transition-colors"
-                title="Reemplazar por completo el informe actual"
+                title="Reemplazar por completo el informe actual o empezar uno nuevo"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-                <span>Reemplazar Informe</span>
+                <span>Cambiar Informe</span>
               </button>
             </div>
           </div>
@@ -935,6 +1015,43 @@ export const NutritionPage: React.FC = () => {
             const currentWeekObj = weeksList[selectedWeekIdx] || weeksList[0];
             const currentDays = currentWeekObj?.days || [];
 
+            // Compute meal slots for Modo Cuadro
+            const defaultSlots = ['Desayuno', 'Media Mañana', 'Comida', 'Merienda', 'Cena'];
+            const seenTypes = new Set<string>();
+            currentDays.forEach((d: any) => {
+              (d.meals || []).forEach((m: any) => {
+                if (m.meal_type) seenTypes.add(m.meal_type.trim());
+              });
+            });
+
+            const normalize = (str: string) => str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+            const orderedSlots: string[] = [];
+            const slotOrder = ['desayuno', 'media manana', 'almuerzo', 'comida', 'merienda', 'cena', 'recena'];
+            slotOrder.forEach(orderKey => {
+              for (const t of Array.from(seenTypes)) {
+                if (normalize(t).includes(orderKey) && !orderedSlots.includes(t)) {
+                  orderedSlots.push(t);
+                }
+              }
+            });
+            for (const t of Array.from(seenTypes)) {
+              if (!orderedSlots.includes(t)) {
+                orderedSlots.push(t);
+              }
+            }
+            const finalMealSlots = orderedSlots.length > 0 ? orderedSlots : defaultSlots;
+
+            const findMeal = (day: any, slot: string) => {
+              if (!day || !day.meals) return null;
+              const normSlot = normalize(slot);
+              let found = day.meals.find((m: any) => normalize(m.meal_type || '') === normSlot);
+              if (!found) {
+                found = day.meals.find((m: any) => normalize(m.meal_type || '').includes(normSlot) || normSlot.includes(normalize(m.meal_type || '')));
+              }
+              return found;
+            };
+
             return (
               <div className="space-y-4 pt-1">
                 {/* Week Selector Pills if more than 1 week */}
@@ -1027,53 +1144,153 @@ export const NutritionPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Days List */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                  {(!currentDays || currentDays.length === 0) ? (
-                    <p className="col-span-full text-xs text-slate-500 dark:text-zinc-400 italic text-center py-6">
-                      No se guardó el detalle diario de comidas para esta semana.
-                    </p>
-                  ) : (
-                    currentDays.map((d: any, dIdx: number) => (
-                      <div
-                        key={dIdx}
-                        className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-2.5"
-                      >
-                        <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-2">
-                          <span className="text-xs font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                            {d.day_name || `Día ${dIdx + 1}`}
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            {d.meals?.length || 0} tomas
-                          </span>
-                        </div>
-
-                        <div className="space-y-1.5">
-                          {d.meals?.map((m: any, mIdx: number) => (
-                            <div
-                              key={mIdx}
-                              className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 text-xs"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                                  {m.meal_type}
-                                </span>
-                                <span className="font-bold text-slate-800 dark:text-zinc-200 truncate block">
-                                  {m.title}
-                                </span>
-                              </div>
-                              {m.calories && (
-                                <span className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full shrink-0">
-                                  {m.calories} kcal
-                                </span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))
-                  )}
+                {/* View switcher: Modo Cuadro vs Modo Fichas */}
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <span className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                    Visualización del menú semanal:
+                  </span>
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-950 rounded-xl border border-slate-200 dark:border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => setMenuViewMode('grid')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        menuViewMode === 'grid'
+                          ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                          : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <Table className="w-3.5 h-3.5" />
+                      <span>Modo Cuadro (Tabla)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMenuViewMode('cards')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        menuViewMode === 'cards'
+                          ? 'bg-amber-500 text-zinc-950 shadow-sm'
+                          : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      <span>Modo Fichas</span>
+                    </button>
+                  </div>
                 </div>
+
+                {/* Table Grid Mode */}
+                {menuViewMode === 'grid' ? (
+                  (!currentDays || currentDays.length === 0) ? (
+                    <div className="p-8 text-center rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800">
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 italic">
+                        No se guardó el detalle diario de comidas para esta semana.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-sm">
+                      <table className="w-full min-w-[850px] border-collapse text-left">
+                        <thead>
+                          <tr className="bg-slate-100/80 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
+                            <th className="py-3 px-3.5 text-xs font-black text-slate-600 dark:text-zinc-400 uppercase tracking-wider w-36 sticky left-0 bg-slate-100 dark:bg-zinc-900 z-10 border-r border-slate-200 dark:border-zinc-800">
+                              Toma
+                            </th>
+                            {currentDays.map((d: any, dIdx: number) => (
+                              <th
+                                key={dIdx}
+                                className="py-3 px-3.5 text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider text-center border-r last:border-r-0 border-slate-200 dark:border-zinc-800"
+                              >
+                                <span className="text-amber-600 dark:text-amber-400 block">{d.day_name || `Día ${dIdx + 1}`}</span>
+                                <span className="text-[10px] font-normal text-slate-400 dark:text-zinc-500">{d.meals?.length || 0} tomas</span>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-zinc-800/80">
+                          {finalMealSlots.map((slot, sIdx) => (
+                            <tr key={sIdx} className="hover:bg-slate-50/50 dark:hover:bg-zinc-900/40 transition-colors">
+                              <td className="py-3 px-3.5 text-xs font-bold text-slate-700 dark:text-zinc-300 capitalize sticky left-0 bg-white dark:bg-zinc-950 z-10 border-r border-slate-200 dark:border-zinc-800">
+                                <span>{slot}</span>
+                              </td>
+                              {currentDays.map((d: any, dIdx: number) => {
+                                const m = findMeal(d, slot);
+                                return (
+                                  <td
+                                    key={dIdx}
+                                    className="py-2.5 px-3 text-xs align-top border-r last:border-r-0 border-slate-100 dark:border-zinc-800/60"
+                                  >
+                                    {m ? (
+                                      <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 space-y-1 hover:border-amber-500/40 transition-colors shadow-2xs">
+                                        <span className="font-bold text-slate-800 dark:text-zinc-100 text-[11px] block leading-snug">
+                                          {m.title}
+                                        </span>
+                                        {m.calories && (
+                                          <span className="inline-block text-[9px] font-mono font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-md">
+                                            🔥 {m.calories} kcal
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="h-full min-h-[44px] flex items-center justify-center text-slate-300 dark:text-zinc-700 text-xs">
+                                        —
+                                      </div>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                ) : (
+                  /* Cards Mode */
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {(!currentDays || currentDays.length === 0) ? (
+                      <p className="col-span-full text-xs text-slate-500 dark:text-zinc-400 italic text-center py-6">
+                        No se guardó el detalle diario de comidas para esta semana.
+                      </p>
+                    ) : (
+                      currentDays.map((d: any, dIdx: number) => (
+                        <div
+                          key={dIdx}
+                          className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between border-b border-slate-200 dark:border-zinc-800 pb-2">
+                            <span className="text-xs font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                              {d.day_name || `Día ${dIdx + 1}`}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {d.meals?.length || 0} tomas
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            {d.meals?.map((m: any, mIdx: number) => (
+                              <div
+                                key={mIdx}
+                                className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 text-xs"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                                    {m.meal_type}
+                                  </span>
+                                  <span className="font-bold text-slate-800 dark:text-zinc-200 truncate block">
+                                    {m.title}
+                                  </span>
+                                </div>
+                                {m.calories && (
+                                  <span className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full shrink-0">
+                                    {m.calories} kcal
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -1096,7 +1313,26 @@ export const NutritionPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleSyncRecipes}
+                    disabled={isSyncingRecipes}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs disabled:opacity-50 transition-colors shadow-sm"
+                    title="Crea recetas privadas en tu cajón con IA para las comidas del menú semanal"
+                  >
+                    {isSyncingRecipes ? (
+                      <>
+                        <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sincronizando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Añadir comidas como recetas</span>
+                      </>
+                    )}
+                  </button>
                   <button
                     type="button"
                     onClick={handleAiReviewAllRecipes}
@@ -1112,7 +1348,7 @@ export const NutritionPage: React.FC = () => {
                     ) : (
                       <>
                         <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                        <span>Revisar todas con IA y Buscar Fotos</span>
+                        <span>Revisar con IA y Fotos</span>
                       </>
                     )}
                   </button>
@@ -1127,11 +1363,34 @@ export const NutritionPage: React.FC = () => {
               </div>
 
               {(!activeReport.recipes || activeReport.recipes.length === 0) ? (
-                <div className="p-8 text-center rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-dashed border-slate-200 dark:border-zinc-800">
-                  <ChefHat className="w-10 h-10 text-slate-300 dark:text-zinc-700 mx-auto mb-2" />
-                  <p className="text-xs text-slate-500 dark:text-zinc-400">
-                    No hay recetas específicas creadas para este informe. Las comidas se planificaron directamente.
-                  </p>
+                <div className="p-8 text-center rounded-2xl bg-slate-50 dark:bg-zinc-950 border border-dashed border-slate-200 dark:border-zinc-800 space-y-3">
+                  <ChefHat className="w-10 h-10 text-slate-300 dark:text-zinc-700 mx-auto" />
+                  <div className="max-w-md mx-auto">
+                    <p className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                      No hay recetas específicas creadas para este informe todavía
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-zinc-400 mt-1">
+                      Las comidas están planificadas en el menú semanal. Pulsa el botón para convertir automáticamente las comidas del menú en fichas de recetas en tu cajón privado con IA.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSyncRecipes}
+                    disabled={isSyncingRecipes}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-sm transition-all disabled:opacity-50"
+                  >
+                    {isSyncingRecipes ? (
+                      <>
+                        <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sincronizando recetas...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Añadir comidas como recetas privadas</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
@@ -1237,7 +1496,14 @@ export const NutritionPage: React.FC = () => {
                             to={`/recipes/${rec.id}`}
                             className="flex-1 py-1.5 text-center rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-[11px] font-bold text-slate-700 dark:text-zinc-300 hover:border-amber-500 transition-colors"
                           >
-                            Ver Receta
+                            Ver
+                          </Link>
+                          <Link
+                            to={`/recipes/${rec.id}/edit`}
+                            className="p-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:text-amber-500 hover:border-amber-500 transition-colors flex items-center justify-center"
+                            title="Editar receta"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
                           </Link>
                           <Link
                             to={`/cook/${rec.id}`}
@@ -1303,35 +1569,35 @@ export const NutritionPage: React.FC = () => {
           )}
         </div>
       ) : (
-        /* Callout banner if no report is active */
-        <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
-          <div className="flex items-start sm:items-center gap-3.5">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-500 flex items-center justify-center shrink-0 border border-amber-500/30">
-              <FileText className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
-                ¿Tienes un informe o pauta de tu nutricionista?
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-zinc-950 uppercase tracking-wider">
-                  Nuevo con IA
-                </span>
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                Sube la foto o PDF de tu dieta: la IA extraerá tus hábitos, consejos y calorías, guardará el informe para tenerlo siempre visible, planificará el menú semanal y mostrará tips diarios en el inicio.
-              </p>
-            </div>
+        /* Empty state inside Report Tab when no report is active */
+        <div className="p-8 sm:p-12 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-center space-y-4 shadow-sm">
+          <div className="w-16 h-16 rounded-3xl bg-amber-500/10 text-amber-500 flex items-center justify-center mx-auto border border-amber-500/20 shadow-inner">
+            <FileText className="w-8 h-8" />
           </div>
-          <Link
-            to="/planner?scan=diet"
-            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition-all shrink-0 self-start sm:self-auto"
+          <div className="max-w-md mx-auto space-y-1.5">
+            <h3 className="text-lg font-black text-slate-900 dark:text-white">
+              No tienes ningún informe de nutricionista activo
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-zinc-400 leading-relaxed">
+              Sube la foto, imagen de galería o documento PDF de la pauta de tu dietista. La inteligencia artificial extraerá tus consejos, objetivo calórico diario, organizará el menú semanal en una tabla interactiva y guardará las recetas en tu cajón privado.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleOpenUpdateModal('replace')}
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-zinc-950 font-bold text-xs shadow-md shadow-amber-500/20 transition-all"
           >
             <Sparkles className="w-4 h-4 fill-zinc-950" />
-            <span>Subir Informe de Dietista</span>
-          </Link>
+            <span>Subir Informe de Dietista con IA</span>
+          </button>
         </div>
-      )}
+      )
+    )}
 
-      {/* Section 1: Hábitos de Deporte y Objetivo Calórico */}
+    {/* Tab: Pautas Generales y Familia */}
+    {mainTab === 'general' && (
+      <>
+        {/* Section 1: Hábitos de Deporte y Objetivo Calórico */}
       <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 space-y-5 shadow-sm">
         <div className="border-b border-slate-100 dark:border-zinc-800 pb-3">
           <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -1744,6 +2010,8 @@ export const NutritionPage: React.FC = () => {
           <span>{isSaving ? 'Guardando...' : 'Guardar Preferencias'}</span>
         </button>
       </div>
+      </>
+    )}
 
       {/* Modal: Add or Edit Diner / Family Member */}
       {showDinerModal && (

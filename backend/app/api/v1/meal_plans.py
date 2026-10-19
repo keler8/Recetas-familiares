@@ -576,18 +576,36 @@ def generate_ai_menu(
     # Gather user nutrition profile & habits
     nut_profile = db.query(NutritionProfile).filter(NutritionProfile.user_id == current_user.id).first()
 
+    # Active Dietitian Report if any
+    active_report = db.query(DietitianReport).filter(
+        DietitianReport.household_id == household.id,
+        DietitianReport.is_active == True
+    ).order_by(DietitianReport.created_at.desc()).first()
+
+    report_guidelines = []
+    if active_report and active_report.dietary_guidelines:
+        try:
+            parsed_g = json.loads(active_report.dietary_guidelines)
+            if isinstance(parsed_g, list):
+                report_guidelines = parsed_g
+        except Exception:
+            report_guidelines = [active_report.dietary_guidelines]
+
     prefs = {
         "focus_healthy": req.focus_healthy,
         "quick_meals_only": req.quick_meals_only,
         "use_pantry_items": req.use_pantry_items,
         "appliances": req.appliances,
         "restrictions": restrictions,
-        "dietary_goals": nut_profile.dietary_goals if nut_profile else None,
-        "cooking_habits": nut_profile.cooking_habits if nut_profile else None,
-        "preferred_foods": nut_profile.preferred_foods if nut_profile else None,
-        "excluded_foods": nut_profile.excluded_foods if nut_profile else None,
+        "dietary_goals": active_report.dietary_goal if (active_report and active_report.dietary_goal) else (nut_profile.dietary_goals if nut_profile else None),
+        "target_calories_day": active_report.target_calories if (active_report and active_report.target_calories) else (nut_profile.target_calories if nut_profile else None),
+        "dietitian_report_title": active_report.title if active_report else None,
+        "dietitian_guidelines": report_guidelines,
+        "cooking_habits": f"{active_report.habits} | {nut_profile.cooking_habits}" if (active_report and active_report.habits and nut_profile and nut_profile.cooking_habits) else (active_report.habits if (active_report and active_report.habits) else (nut_profile.cooking_habits if nut_profile else None)),
+        "preferred_foods": active_report.preferred_foods or (nut_profile.preferred_foods if nut_profile else None),
+        "excluded_foods": active_report.excluded_foods or (nut_profile.excluded_foods if nut_profile else None),
         "available_time_min": nut_profile.available_time_min if nut_profile else 45,
-        "notes": nut_profile.notes if nut_profile else None
+        "notes": f"Pautas informe dietista: {active_report.notes}" if (active_report and active_report.notes) else (nut_profile.notes if nut_profile else None)
     }
 
     proposals = gemini_service.generate_meal_plan_suggestions(recipes_data, prefs)
