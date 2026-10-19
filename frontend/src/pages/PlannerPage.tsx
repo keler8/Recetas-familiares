@@ -6,7 +6,7 @@ import {
   Package, Trash2, ArrowRight, Flame, Search, X, Apple, Coffee, Sun, Moon, ShoppingBag,
   Camera, UploadCloud, FileText, Check, AlertCircle, RefreshCw, ChefHat, BookOpen,
   User, Users, Target, Heart, Sliders, Activity,
-  GripVertical, BookmarkPlus, BookmarkCheck, Copy, ArrowRightLeft, Layers
+  GripVertical, BookmarkPlus, BookmarkCheck, Copy, ArrowRightLeft, Layers, Info
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -44,7 +44,22 @@ export const PlannerPage: React.FC = () => {
   const [selectedRecipeId, setSelectedRecipeId] = useState<number | null>(null);
   const [customName, setCustomName] = useState('');
   const [customCalories, setCustomCalories] = useState<number | ''>('');
-  const [servings, setServings] = useState(4);
+  const [userDefaultServings, setUserDefaultServings] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('user_default_servings');
+      return saved ? Number(saved) : 4;
+    } catch {
+      return 4;
+    }
+  });
+  const [servings, setServings] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('user_default_servings');
+      return saved ? Number(saved) : 4;
+    } catch {
+      return 4;
+    }
+  });
   const [isSavingItem, setIsSavingItem] = useState(false);
 
   // Leftover Modal State
@@ -137,19 +152,50 @@ export const PlannerPage: React.FC = () => {
 
   const fetchRecipesAndProfile = async () => {
     try {
-      const [recs, nutProfile, diners] = await Promise.all([
+      const [recs, nutProfile, diners, userPrefs, activeReport] = await Promise.all([
         apiRequest('/recipes?limit=100').catch(() => []),
         apiRequest('/nutrition/profile').catch(() => null),
-        apiRequest<any[]>('/households/diners').catch(() => [])
+        apiRequest<any[]>('/households/diners').catch(() => []),
+        apiRequest('/auth/preferences').catch(() => null),
+        apiRequest('/nutrition/active-report').catch(() => null)
       ]);
       setRecipesList(recs || []);
       setDinersList(diners || []);
       if (nutProfile && nutProfile.target_calories) {
         setTargetCalories(nutProfile.target_calories);
       }
+
+      let preferredServings = 4;
+      if (userPrefs && userPrefs.default_servings) {
+        preferredServings = Number(userPrefs.default_servings);
+      } else if (activeReport && activeReport.household_servings) {
+        preferredServings = Number(activeReport.household_servings);
+      } else if (diners && diners.length > 0) {
+        preferredServings = diners.length;
+      }
+      setUserDefaultServings(preferredServings);
+      setServings(preferredServings);
+      try {
+        localStorage.setItem('user_default_servings', String(preferredServings));
+      } catch {}
     } catch (err) {
       console.warn('Error fetching recipes or profile:', err);
     }
+  };
+
+  const handleOpenRecipeDetail = (item: any) => {
+    const s = item.servings || userDefaultServings;
+    if (item.recipe_id) {
+      navigate(`/recipes/${item.recipe_id}?servings=${s}`);
+      return;
+    }
+    const itemTitle = (item.recipe_title || item.custom_recipe_name || '').trim().toLowerCase();
+    const matched = recipesList.find(r => r.title?.trim().toLowerCase() === itemTitle);
+    if (matched) {
+      navigate(`/recipes/${matched.id}?servings=${s}`);
+      return;
+    }
+    navigate(`/recipes?search=${encodeURIComponent(item.recipe_title || item.custom_recipe_name || '')}`);
   };
 
   useEffect(() => {
@@ -207,7 +253,7 @@ export const PlannerPage: React.FC = () => {
     setSelectedRecipeId(null);
     setCustomName('');
     setCustomCalories('');
-    setServings(4);
+    setServings(userDefaultServings);
     setRecipeSearch('');
     setShowAddModal(true);
   };
@@ -821,7 +867,14 @@ export const PlannerPage: React.FC = () => {
                                   <div className="flex items-center gap-1.5 pr-2 flex-1 min-w-0">
                                     <GripVertical className="w-3.5 h-3.5 text-slate-300 dark:text-zinc-600 group-hover:text-amber-500 shrink-0 cursor-grab" />
                                     <div className="min-w-0 flex-1">
-                                      <span className="font-semibold text-slate-800 dark:text-zinc-200 block truncate">
+                                      <span
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleOpenRecipeDetail(it);
+                                        }}
+                                        className="font-semibold text-slate-800 dark:text-zinc-200 block truncate cursor-pointer hover:text-amber-600 dark:hover:text-amber-400 hover:underline transition-colors"
+                                        title="Entrar en la receta"
+                                      >
                                         {it.recipe_title || it.custom_recipe_name}
                                       </span>
                                       <div className="flex items-center gap-2 mt-0.5">
@@ -837,7 +890,18 @@ export const PlannerPage: React.FC = () => {
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center gap-1">
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenRecipeDetail(it);
+                                      }}
+                                      className="w-6 h-6 rounded-lg bg-amber-500/15 hover:bg-amber-500 text-amber-700 dark:text-amber-300 hover:text-zinc-950 dark:hover:text-zinc-950 flex items-center justify-center transition-all shadow-xs"
+                                      title="Entrar en la receta"
+                                    >
+                                      <Info className="w-4 h-4 stroke-[2.5]" />
+                                    </button>
                                     <button
                                       type="button"
                                       onClick={() => handleOpenQuickMove(it, day.isoDate, meal.id)}
@@ -1034,24 +1098,51 @@ export const PlannerPage: React.FC = () => {
               )}
 
               <div>
-                <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">
-                  Raciones / Comensales
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                    Raciones / Comensales
+                  </label>
+                  {userDefaultServings > 0 && (
+                    <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <span>Tu ajuste personalizado:</span>
+                      <strong className="font-extrabold">{userDefaultServings} {userDefaultServings === 1 ? 'ración' : 'raciones'}</strong>
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex items-center gap-2 mt-1">
-                  {[1, 2, 4, 6].map(num => (
-                    <button
-                      key={num}
-                      type="button"
-                      onClick={() => setServings(num)}
-                      className={`flex-1 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
-                        servings === num
-                          ? 'bg-amber-500 text-zinc-950 border-amber-500'
-                          : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800'
-                      }`}
-                    >
-                      {num} {num === 1 ? 'ración' : 'raciones'}
-                    </button>
-                  ))}
+                  {Array.from(new Set([1, 2, userDefaultServings, 4, 6]))
+                    .filter((num) => num > 0)
+                    .sort((a, b) => a - b)
+                    .map((num) => (
+                      <button
+                        key={num}
+                        type="button"
+                        onClick={() => setServings(num)}
+                        className={`flex-1 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                          servings === num
+                            ? 'bg-amber-500 text-zinc-950 border-amber-500 shadow-sm'
+                            : 'bg-slate-50 dark:bg-zinc-950 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:border-amber-500/40'
+                        }`}
+                      >
+                        {num} {num === 1 ? 'rac.' : 'raciones'}
+                      </button>
+                    ))}
+                </div>
+
+                <div className="mt-2.5 flex items-center justify-between text-xs text-slate-500 dark:text-zinc-400 bg-slate-50 dark:bg-zinc-950/60 p-2 rounded-xl border border-slate-100 dark:border-zinc-800">
+                  <span className="text-[11px] font-medium">Ajuste manual exacto:</span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={servings}
+                      onChange={(e) => setServings(Math.max(1, Number(e.target.value) || 1))}
+                      className="w-16 px-2 py-1 text-center bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-lg text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+                    />
+                    <span className="text-[11px] font-semibold text-slate-700 dark:text-zinc-300">raciones</span>
+                  </div>
                 </div>
               </div>
 

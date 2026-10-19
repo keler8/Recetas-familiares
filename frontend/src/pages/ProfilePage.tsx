@@ -112,7 +112,12 @@ export const ProfilePage: React.FC = () => {
 
     apiRequest('/auth/preferences').then(prefs => {
       if (prefs) {
-        if (prefs.default_servings) setServings(prefs.default_servings);
+        if (prefs.default_servings) {
+          setServings(prefs.default_servings);
+          try {
+            localStorage.setItem('user_default_servings', String(prefs.default_servings));
+          } catch {}
+        }
         if (prefs.notification_channels) {
           try {
             const parsed = typeof prefs.notification_channels === 'string'
@@ -262,6 +267,7 @@ export const ProfilePage: React.FC = () => {
     setPrefsSaved(false);
     try {
       localStorage.setItem('homepage_widgets', JSON.stringify(widgets));
+      localStorage.setItem('user_default_servings', String(servings));
       await apiRequest('/auth/preferences', {
         method: 'PUT',
         body: JSON.stringify({

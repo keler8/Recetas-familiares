@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Heart, Clock, Star, ChefHat, Play,
   Sparkles, Flame, Check, MessageSquare, StickyNote,
@@ -11,6 +11,7 @@ import { getOfflineRecipe } from '../services/db';
 
 export const RecipeDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const { t } = useLanguage();
   const navigate = useNavigate();
 
@@ -18,7 +19,18 @@ export const RecipeDetailPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null);
-  const [selectedServings, setSelectedServings] = useState<number>(4);
+  const [selectedServings, setSelectedServings] = useState<number>(() => {
+    const queryServings = searchParams.get('servings');
+    if (queryServings && Number(queryServings) > 0) {
+      return Number(queryServings);
+    }
+    try {
+      const saved = localStorage.getItem('user_default_servings');
+      return saved ? Number(saved) : 4;
+    } catch {
+      return 4;
+    }
+  });
   const [scaledData, setScaledData] = useState<any>(null);
   const [personalNote, setPersonalNote] = useState<string>('');
   const [isSavingNote, setIsSavingNote] = useState(false);
@@ -104,7 +116,22 @@ export const RecipeDetailPage: React.FC = () => {
     try {
       const data = await apiRequest(`/recipes/${id}`);
       setRecipe(data);
-      setSelectedServings(data.base_servings || 4);
+
+      const queryServings = searchParams.get('servings');
+      if (queryServings && Number(queryServings) > 0) {
+        setSelectedServings(Number(queryServings));
+      } else {
+        const userSaved = (() => {
+          try {
+            const s = localStorage.getItem('user_default_servings');
+            return s ? Number(s) : null;
+          } catch {
+            return null;
+          }
+        })();
+        setSelectedServings(userSaved || data.base_servings || 4);
+      }
+
       setPersonalNote(data.personal_notes || '');
 
       // Set default variant
@@ -117,7 +144,20 @@ export const RecipeDetailPage: React.FC = () => {
       const offline = await getOfflineRecipe(Number(id));
       if (offline) {
         setRecipe(offline);
-        setSelectedServings(offline.base_servings || 4);
+        const queryServings = searchParams.get('servings');
+        if (queryServings && Number(queryServings) > 0) {
+          setSelectedServings(Number(queryServings));
+        } else {
+          const userSaved = (() => {
+            try {
+              const s = localStorage.getItem('user_default_servings');
+              return s ? Number(s) : null;
+            } catch {
+              return null;
+            }
+          })();
+          setSelectedServings(userSaved || offline.base_servings || 4);
+        }
         if (offline.variants && offline.variants.length > 0) {
           setSelectedVariantId(offline.variants[0].id);
         }
@@ -439,19 +479,22 @@ export const RecipeDetailPage: React.FC = () => {
         <div className="flex items-center justify-between py-2 border-y border-zinc-800/80">
           <span className="text-sm font-bold text-white">{t('servings')}</span>
           <div className="flex items-center gap-2">
-            {[2, 4, 6, 8].map(s => (
-              <button
-                key={s}
-                onClick={() => setSelectedServings(s)}
-                className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                  selectedServings === s
-                    ? 'bg-zinc-800 text-white border-2 border-amber-500 shadow-sm'
-                    : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
+            {Array.from(new Set([1, 2, selectedServings, 4, 6, 8]))
+              .filter(s => s > 0)
+              .sort((a, b) => a - b)
+              .map(s => (
+                <button
+                  key={s}
+                  onClick={() => setSelectedServings(s)}
+                  className={`min-w-9 h-9 px-2 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+                    selectedServings === s
+                      ? 'bg-amber-500 text-zinc-950 font-black border-2 border-amber-400 shadow-sm'
+                      : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800'
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
           </div>
         </div>
 
