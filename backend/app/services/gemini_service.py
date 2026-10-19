@@ -91,6 +91,23 @@ class GeminiService:
         if not text:
             return "{}"
         t = text.strip()
+        import re
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", t)
+        if match:
+            candidate = match.group(1).strip()
+            if (candidate.startswith("{") and candidate.endswith("}")) or (candidate.startswith("[") and candidate.endswith("]")):
+                return candidate
+
+        start_obj = t.find("{")
+        end_obj = t.rfind("}")
+        start_arr = t.find("[")
+        end_arr = t.rfind("]")
+
+        if start_obj != -1 and end_obj != -1 and (start_arr == -1 or start_obj < start_arr):
+            return t[start_obj:end_obj + 1].strip()
+        elif start_arr != -1 and end_arr != -1:
+            return t[start_arr:end_arr + 1].strip()
+
         if t.startswith("```json"):
             t = t[7:]
         elif t.startswith("```"):
@@ -1106,68 +1123,73 @@ class GeminiService:
                 from google.genai import types
                 part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
                 prompt = (
-                    "Eres un asistente nutricionista y culinario clínico de alta precisión.\n"
-                    "Analiza este informe de una dietista, pauta médica o documento de planificación nutricional semanal "
-                    "y extrae tanto el perfil y hábitos de la persona como toda la planificación semanal en formato JSON estricto.\n\n"
-                    "Reglas de extracción:\n"
-                    "1. Perfil del paciente y hábitos:\n"
-                    "   - 'patient_name': Nombre de la persona o comensal si aparece en el informe (o null si no figura).\n"
-                    "   - 'target_calories': Calorías diarias totales recomendadas para la persona (número entero, ej. 1500, 1800, 2000, o null si no se especifica).\n"
-                    "   - 'dietary_goal': Objetivo del plan ('deficit' para pérdida de grasa, 'mantenimiento', 'superavit' o aumento muscular, 'saludable' o 'antiinflamatorio').\n"
-                    "   - 'habits': Resumen de hábitos, pautas y estilo de vida prescritos por la dietista (ej. 'Beber 2L de agua diarios, cocinar a la plancha/vapor, 5 tomas al día, ejercicio moderado 30min').\n"
-                    "   - 'dietary_guidelines': Lista de pautas o consejos clave indicados por la dietista en formato lista de strings (ej. ['Beber 2 litros de agua al día', 'Priorizar AOVE en crudo', 'Evitar bebidas azucaradas']).\n"
-                    "   - 'preferred_foods': Alimentos recomendados o destacados (texto o null).\n"
-                    "   - 'excluded_foods': Alimentos prohibidos, desaconsejados o alérgenos a evitar (texto o null).\n"
-                    "   - 'notes': Cualquier otra indicación relevante de la consulta o informe.\n\n"
-                    "2. Planificación semanal de comidas:\n"
-                    "   - Identifica los días de la semana (lunes, martes, miercoles, jueves, viernes, sabado, domingo). Si la imagen solo tiene días numerados (Día 1 a 7), mapea Día 1 a lunes, etc.\n"
-                    "   - Clasifica cada toma estrictamente en uno de estos valores para 'meal_type':\n"
-                    "     * 'desayuno'\n"
-                    "     * 'almuerzo' (media mañana)\n"
-                    "     * 'comida' (almuerzo principal)\n"
-                    "     * 'merienda'\n"
-                    "     * 'cena'\n"
-                    "     * 'snacks' (picoteo o suplementación)\n"
-                    "   - Para cada plato o comida extrae:\n"
-                    "     * 'title': Nombre claro y apetitoso del plato o alimento (ej. 'Lentejas estofadas con verduras', 'Yogur natural con nueces', 'Pollo a la plancha con judías verdes').\n"
-                    "     * 'calories': Calorías estimadas para 1 ración individual del paciente (ej. 450, o 180 para merienda/snack).\n"
-                    "     * 'is_recipe': true si es un plato cocinado/receta con preparación (ej. guiso, ensalada mixta, salteado, tortilla, pescado al horno); false si es un alimento directo o producto sin receta (ej. '1 manzana', 'café solo', '2 nueces').\n"
-                    "     * 'description': Breve descripción culinaria de 1 o 2 frases.\n"
-                    "     * 'ingredients': Lista de ingredientes deducibles o visibles para 1 ración individual con {'name': str, 'amount': float or null, 'unit': str or null}.\n"
-                    "     * 'steps': Pasos sencillos de preparación si es una receta elaborada [{'step_number': 1, 'instruction': '...'}].\n\n"
-                    "Responde ÚNICAMENTE con el objeto JSON sin comillas invertidas ni bloques ```json. La estructura requerida es:\n"
+                    "Eres un asistente nutricionista clínico y chef culinario de máxima precisión.\n"
+                    "Analiza este informe de dietista, menú nutricional o documento de planificación semanal "
+                    "y extrae el perfil del paciente, todas las pautas y hábitos, la planificación semanal completa de lunes a domingo, "
+                    "y todas las recetas individuales en formato JSON estricto.\n\n"
+                    "INSTRUCCIONES CLÍNICAS Y CULINARIAS CRÍTICAS:\n"
+                    "1. Estructura típica de menús de dietista (como LMO Nutrición):\n"
+                    "   - Suelen incluir bloques generales para 'DES-AYUNO' con 2 o 3 opciones (ej. Bol de yogur con chía y avena, Tortitas de avena proteicas, Tostadas integrales con varias combinaciones).\n"
+                    "   - Suelen incluir bloques generales para 'SNACKS / MEDIAS MAÑANAS / MERIENDAS' (ej. Batidos de fruta con proteína en polvo, Muffin en airfryer/horno, Dátiles o barritas como preentreno).\n"
+                    "   - Suelen incluir indicaciones de 'POSTRE' (ej. Infusión digestiva/relajante + 1 onza de chocolate negro 85%).\n"
+                    "   - Las 'COMIDA' y 'CENA' suelen estar organizadas en columnas por día de la semana (Lunes a Domingo), incluyendo posibles días con 'Cena Libre'.\n\n"
+                    "2. Reglas de extracción en 'days':\n"
+                    "   - Debes generar OBLIGATORIAMENTE los 7 días de la semana con 'day_name': 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'.\n"
+                    "   - Para cada día distribuye y rota las opciones de desayuno del documento, de modo que cada día tenga su 'desayuno'.\n"
+                    "   - Incluye 'almuerzo' (media mañana o snack preentreno) y 'merienda' (batido, muffin en airfryer o fruta).\n"
+                    "   - Incluye 'comida' y 'cena' correspondientes a la columna de ese día exacto.\n"
+                    "   - Incluye 'postre' (la infusión con chocolate negro recomendada tras la cena).\n\n"
+                    "3. Reglas de extracción en 'recipes':\n"
+                    "   - Extrae una lista exhaustiva de TODAS las recetas que aparecen en el documento (desayunos, comidas, cenas, snacks, postres elaborados).\n"
+                    "   - Para cada receta detalla: 'title', 'meal_type' (desayuno, comida, cena, merienda, postre), 'description', 'calories', 'ingredients' ([{'name': str, 'amount': float or null, 'unit': str or null}]), 'steps' ([{'step_number': int, 'instruction': str}]).\n\n"
+                    "4. 'dietary_guidelines':\n"
+                    "   - Extrae en una lista de strings TODOS los consejos nutricionales, pautas de hidratación libre (infusiones, café, agua con gas), normas del preentreno (dátiles/barrita 45-60 min antes), pauta de proteína en polvo (si pasan más de 1.5-2h desde entreno a cena), aliño con AOVE en crudo, técnicas de cocción rápida (boniato al microondas 10 min, airfryer, etc.) y postres.\n\n"
+                    "Responde estrictamente con un objeto JSON válido con este esquema:\n"
                     "{\n"
-                    "  \"plan_title\": \"Plan Nutricional Dietista\",\n"
+                    "  \"plan_title\": \"Menú / Plan Nutricional Dietista\",\n"
                     "  \"patient_name\": \"Nombre del paciente o null\",\n"
-                    "  \"target_calories\": 1600,\n"
+                    "  \"target_calories\": 1750,\n"
                     "  \"dietary_goal\": \"deficit\",\n"
-                    "  \"habits\": \"Pautas generales prescritas por la dietista...\",\n"
-                    "  \"dietary_guidelines\": [\"Pauta 1\", \"Pauta 2\"],\n"
-                    "  \"preferred_foods\": \"Verduras de temporada, legumbres, pescado azul\",\n"
-                    "  \"excluded_foods\": \"Fritos, ultraprocesados, harinas refinadas\",\n"
-                    "  \"notes\": \"Indicaciones de la consulta\",\n"
+                    "  \"habits\": \"Hábitos y pautas generales de cocina y estilo de vida...\",\n"
+                    "  \"dietary_guidelines\": [\"Consejo 1\", \"Consejo 2\"],\n"
+                    "  \"preferred_foods\": \"Alimentos recomendados...\",\n"
+                    "  \"excluded_foods\": \"Alimentos desaconsejados o a evitar...\",\n"
+                    "  \"notes\": \"Observaciones clínicas relevantes\",\n"
                     "  \"days\": [\n"
                     "    {\n"
                     "      \"day_name\": \"lunes\",\n"
                     "      \"meals\": [\n"
-                    "        {\n"
-                    "          \"meal_type\": \"desayuno\",\n"
-                    "          \"title\": \"Tostadas integrales con aguacate y huevo\",\n"
-                    "          \"calories\": 360,\n"
-                    "          \"is_recipe\": true,\n"
-                    "          \"description\": \"Tostadas de masa madre con aguacate machacado y huevo pochado\",\n"
-                    "          \"ingredients\": [{\"name\": \"Pan integral\", \"amount\": 2, \"unit\": \"rebanadas\"}, {\"name\": \"Aguacate\", \"amount\": 0.5, \"unit\": \"unidad\"}, {\"name\": \"Huevos\", \"amount\": 2, \"unit\": \"unidades\"}],\n"
-                    "          \"steps\": [{\"step_number\": 1, \"instruction\": \"Tostar las rebanadas de pan.\"}, {\"step_number\": 2, \"instruction\": \"Pochar o cocinar los huevos a la plancha y montar sobre el aguacate.\"}]\n"
-                    "        }\n"
+                    "        {\"meal_type\": \"desayuno\", \"title\": \"...\", \"calories\": 350, \"is_recipe\": true, \"description\": \"...\", \"ingredients\": [], \"steps\": []},\n"
+                    "        {\"meal_type\": \"almuerzo\", \"title\": \"...\", \"calories\": 100, \"is_recipe\": false, \"description\": \"...\", \"ingredients\": [], \"steps\": []},\n"
+                    "        {\"meal_type\": \"comida\", \"title\": \"...\", \"calories\": 550, \"is_recipe\": true, \"description\": \"...\", \"ingredients\": [], \"steps\": []},\n"
+                    "        {\"meal_type\": \"merienda\", \"title\": \"...\", \"calories\": 200, \"is_recipe\": true, \"description\": \"...\", \"ingredients\": [], \"steps\": []},\n"
+                    "        {\"meal_type\": \"cena\", \"title\": \"...\", \"calories\": 450, \"is_recipe\": true, \"description\": \"...\", \"ingredients\": [], \"steps\": []},\n"
+                    "        {\"meal_type\": \"postre\", \"title\": \"...\", \"calories\": 50, \"is_recipe\": false, \"description\": \"...\", \"ingredients\": [], \"steps\": []}\n"
                     "      ]\n"
+                    "    }\n"
+                    "  ],\n"
+                    "  \"recipes\": [\n"
+                    "    {\n"
+                    "      \"title\": \"Nombre de la receta\",\n"
+                    "      \"meal_type\": \"desayuno\",\n"
+                    "      \"description\": \"Descripción culinaria\",\n"
+                    "      \"calories\": 350,\n"
+                    "      \"ingredients\": [{\"name\": \"Ingrediente\", \"amount\": 100, \"unit\": \"g\"}],\n"
+                    "      \"steps\": [{\"step_number\": 1, \"instruction\": \"Instrucción\"}]\n"
                     "    }\n"
                     "  ]\n"
                     "}"
                 )
 
-                response = client.models.generate_content(
-                    model=model_to_use,
-                    contents=[part, prompt]
+                gen_cfg = types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1
+                )
+
+                response = self._generate_with_fallback(
+                    client=client,
+                    contents=[part, prompt],
+                    config=gen_cfg
                 )
 
                 cleaned = self._clean_json_response(response.text)
