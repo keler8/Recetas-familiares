@@ -62,6 +62,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const token = localStorage.getItem('token');
   const isLoginPage = location.pathname === '/login';
   const isCookingMode = location.pathname.includes('/cook');
+  const isRecipeForm = location.pathname === '/recipes/new' || location.pathname.includes('/edit');
 
   if (isLoginPage || (!user && !token)) {
     return <main className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100">{children}</main>;
@@ -74,8 +75,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 font-sans selection:bg-amber-500 selection:text-black transition-colors duration-150">
       <Navbar />
-      <main className="flex-1 pb-16 md:pb-8">{children}</main>
-      <BottomNav />
+      <main className={`flex-1 ${isRecipeForm ? 'pb-24' : 'pb-16 md:pb-8'}`}>{children}</main>
+      {!isRecipeForm && <BottomNav />}
     </div>
   );
 };

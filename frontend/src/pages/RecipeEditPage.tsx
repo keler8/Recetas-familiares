@@ -315,9 +315,14 @@ export const RecipeEditPage: React.FC = () => {
     setSteps(updated);
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
+  const handleSave = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e && typeof e.preventDefault === 'function') {
+      e.preventDefault();
+    }
+    if (!title.trim()) {
+      alert('Por favor introduce un título para la receta antes de guardar.');
+      return;
+    }
 
     setIsSaving(true);
     const recipePayload = {
@@ -377,20 +382,34 @@ export const RecipeEditPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6 pb-24 animate-in fade-in">
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => navigate(-1)}
-          className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <div>
-          <h1 className="text-2xl font-black text-white tracking-tight">
-            {isEditing ? 'Editar Receta' : 'Nueva Receta'}
-          </h1>
-          <p className="text-xs text-zinc-400 mt-0.5">Ficha estructurada en la biblioteca compartida</p>
+    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6 pb-32 animate-in fade-in">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-white transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+              {isEditing ? 'Editar Receta' : 'Nueva Receta'}
+            </h1>
+            <p className="text-xs text-zinc-400 mt-0.5">Ficha estructurada en la biblioteca compartida</p>
+          </div>
         </div>
+
+        {/* Top Direct Save Button */}
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={isSaving || isDeleting}
+          className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-zinc-950 font-bold text-xs sm:text-sm shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2 disabled:opacity-50 shrink-0"
+        >
+          <Save className="w-4 h-4" />
+          <span>{isSaving ? 'Guardando...' : 'Guardar Receta'}</span>
+        </button>
       </div>
 
       <form onSubmit={handleSave} className="space-y-6">
@@ -1144,29 +1163,43 @@ export const RecipeEditPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Submit & Delete Buttons */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-zinc-950/90 backdrop-blur-md border-t border-zinc-800 flex items-center justify-between max-w-3xl mx-auto z-40">
-          {isEditing ? (
-            <button
-              type="button"
-              onClick={handleDeleteRecipe}
-              disabled={isDeleting || isSaving}
-              className="px-4 py-2.5 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 font-bold text-xs flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
-              title="Eliminar receta permanentemente"
-            >
-              <Trash2 className="w-4 h-4 text-rose-400" />
-              <span>{isDeleting ? 'Eliminando...' : 'Eliminar Receta'}</span>
-            </button>
-          ) : <div />}
+        {/* Submit & Delete Buttons Floating Bar */}
+        <div className="fixed bottom-0 left-0 right-0 z-50 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 py-3.5 px-4 shadow-2xl">
+          <div className="max-w-3xl mx-auto flex items-center justify-between gap-3">
+            {isEditing ? (
+              <button
+                type="button"
+                onClick={handleDeleteRecipe}
+                disabled={isDeleting || isSaving}
+                className="px-3.5 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 font-bold text-xs flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50"
+                title="Eliminar receta permanentemente"
+              >
+                <Trash2 className="w-4 h-4 text-rose-400" />
+                <span className="hidden sm:inline">{isDeleting ? 'Eliminando...' : 'Eliminar Receta'}</span>
+                <span className="sm:hidden">{isDeleting ? '...' : 'Eliminar'}</span>
+              </button>
+            ) : <div />}
 
-          <button
-            type="submit"
-            disabled={isSaving || isDeleting}
-            className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-sm shadow-xl shadow-amber-500/20 transition-all flex items-center justify-center gap-2"
-          >
-            <Save className="w-4 h-4" />
-            <span>{isSaving ? 'Guardando...' : 'Guardar Receta'}</span>
-          </button>
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => navigate(-1)}
+                className="px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 font-bold text-xs border border-zinc-700/80 transition-all active:scale-95"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="submit"
+                onClick={handleSave}
+                disabled={isSaving || isDeleting}
+                className="px-5 sm:px-7 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-zinc-950 font-bold text-xs sm:text-sm shadow-xl shadow-amber-500/25 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                <span>{isSaving ? 'Guardando...' : 'Guardar Receta'}</span>
+              </button>
+            </div>
+          </div>
         </div>
 
       </form>
