@@ -5,7 +5,8 @@ import {
   ChevronLeft, ChevronRight, CheckCircle, Utensils,
   Package, Trash2, ArrowRight, Flame, Search, X, Apple, Coffee, Sun, Moon, ShoppingBag,
   Camera, UploadCloud, FileText, Check, AlertCircle, RefreshCw, ChefHat, BookOpen,
-  User, Users, Target, Heart, Sliders, Activity
+  User, Users, Target, Heart, Sliders, Activity,
+  GripVertical, BookmarkPlus, BookmarkCheck, Copy, ArrowRightLeft, Layers
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -69,6 +70,35 @@ export const PlannerPage: React.FC = () => {
   const [showLeftoverModal, setShowLeftoverModal] = useState(false);
   const [newLeftoverName, setNewLeftoverName] = useState('');
   const [newLeftoverPortions, setNewLeftoverPortions] = useState(2);
+
+  // Drag and Drop & Quick Move States
+  const [draggedItem, setDraggedItem] = useState<{ id: number; name: string } | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<{ date: string; mealType: string } | null>(null);
+  const [isMovingItem, setIsMovingItem] = useState(false);
+
+  const [movingItem, setMovingItem] = useState<{
+    id: number;
+    title: string;
+    currentDate: string;
+    currentMealType: string;
+  } | null>(null);
+  const [moveTargetDate, setMoveTargetDate] = useState<string>('');
+  const [moveTargetMealType, setMoveTargetMealType] = useState<string>('comida');
+
+  // Templates & Copy Week States
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [templateTitle, setTemplateTitle] = useState('');
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+
+  const [showTemplatesModal, setShowTemplatesModal] = useState(false);
+  const [templatesList, setTemplatesList] = useState<any[]>([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [isApplyingTemplate, setIsApplyingTemplate] = useState(false);
+
+  const [showCopyWeekModal, setShowCopyWeekModal] = useState(false);
+  const [copyTargetWeekOffset, setCopyTargetWeekOffset] = useState<number>(1);
+  const [copyMode, setCopyMode] = useState<'replace' | 'merge'>('replace');
+  const [isCopyingWeek, setIsCopyingWeek] = useState(false);
 
   // Calculate current week days (Monday to Sunday) based on weekOffset
   const getWeekDays = () => {
@@ -314,6 +344,191 @@ export const PlannerPage: React.FC = () => {
     }
   };
 
+  // Drag and Drop & Move Handlers
+  const handleDragStart = (e: React.DragEvent, item: any, sourceDate: string, sourceMealType: string) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({
+      plannedId: item.id,
+      sourceDate,
+      sourceMealType,
+      title: item.recipe_title || item.custom_recipe_name
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+    setDraggedItem({ id: item.id, name: item.recipe_title || item.custom_recipe_name });
+  };
+
+  const handleDropItem = async (e: React.DragEvent, targetDate: string, targetMealType: string) => {
+    e.preventDefault();
+    setDragOverSlot(null);
+    setDraggedItem(null);
+
+    const rawData = e.dataTransfer.getData('text/plain');
+    if (!rawData) return;
+    try {
+      const data = JSON.parse(rawData);
+      if (!data.plannedId) return;
+      if (data.sourceDate === targetDate && data.sourceMealType === targetMealType) {
+        return; // Mismo slot, no hace falta mover
+      }
+      await executeMove(data.plannedId, targetDate, targetMealType);
+    } catch (err) {
+      console.warn('Error parsing drop data:', err);
+    }
+  };
+
+  const executeMove = async (plannedId: number, targetDate: string, targetMealType: string) => {
+    setIsMovingItem(true);
+    try {
+      await apiRequest('/meal-plans/move-item', {
+        method: 'POST',
+        body: JSON.stringify({
+          planned_recipe_id: plannedId,
+          target_date: targetDate,
+          target_meal_type: targetMealType
+        })
+      });
+      await fetchPlans();
+    } catch (err: any) {
+      alert(`Error al mover alimento/receta: ${err.message || err}`);
+    } finally {
+      setIsMovingItem(false);
+    }
+  };
+
+  const handleOpenQuickMove = (item: any, currentDate: string, currentMealType: string) => {
+    setMovingItem({
+      id: item.id,
+      title: item.recipe_title || item.custom_recipe_name,
+      currentDate,
+      currentMealType
+    });
+    setMoveTargetDate(currentDate);
+    setMoveTargetMealType(currentMealType);
+  };
+
+  const handleExecuteQuickMove = async () => {
+    if (!movingItem) return;
+    if (movingItem.currentDate === moveTargetDate && movingItem.currentMealType === moveTargetMealType) {
+      setMovingItem(null);
+      return;
+    }
+    await executeMove(movingItem.id, moveTargetDate, moveTargetMealType);
+    setMovingItem(null);
+  };
+
+  // Templates & Copy Handlers
+  const handleOpenSaveTemplate = () => {
+    setTemplateTitle(`Menú Semana ${weekDays[0].displayDate} - ${weekDays[6].displayDate}`);
+    setShowSaveTemplateModal(true);
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!templateTitle.trim()) {
+      alert('Por favor introduce un nombre para la plantilla');
+      return;
+    }
+    setIsSavingTemplate(true);
+    try {
+      await apiRequest('/meal-plans/save-template', {
+        method: 'POST',
+        body: JSON.stringify({
+          source_start_date: weekDays[0].isoDate,
+          title: templateTitle.trim()
+        })
+      });
+      alert('¡Semana guardada como plantilla con éxito! Puedes reutilizarla cuando quieras.');
+      setShowSaveTemplateModal(false);
+    } catch (err: any) {
+      alert(`Error al guardar plantilla: ${err.message || err}`);
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  };
+
+  const fetchTemplatesList = async () => {
+    setIsLoadingTemplates(true);
+    try {
+      const data = await apiRequest('/meal-plans/templates');
+      setTemplatesList(data || []);
+    } catch (err: any) {
+      console.warn('Error fetching templates:', err);
+    } finally {
+      setIsLoadingTemplates(false);
+    }
+  };
+
+  const handleOpenTemplatesModal = async () => {
+    setShowTemplatesModal(true);
+    await fetchTemplatesList();
+  };
+
+  const handleApplyTemplate = async (templateId: number, mode: 'replace' | 'merge' = 'replace') => {
+    if (mode === 'replace' && !confirm('¿Deseas sustituir el menú de esta semana por la plantilla seleccionada?')) {
+      return;
+    }
+    setIsApplyingTemplate(true);
+    try {
+      await apiRequest('/meal-plans/apply-template', {
+        method: 'POST',
+        body: JSON.stringify({
+          template_id: templateId,
+          target_start_date: weekDays[0].isoDate,
+          mode
+        })
+      });
+      alert('¡Plantilla aplicada a esta semana con éxito!');
+      setShowTemplatesModal(false);
+      await fetchPlans();
+    } catch (err: any) {
+      alert(`Error al aplicar plantilla: ${err.message || err}`);
+    } finally {
+      setIsApplyingTemplate(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (templateId: number) => {
+    if (!confirm('¿Seguro que deseas eliminar esta plantilla guardada?')) return;
+    try {
+      await apiRequest(`/meal-plans/templates/${templateId}`, { method: 'DELETE' });
+      setTemplatesList(prev => prev.filter(t => t.id !== templateId));
+    } catch (err: any) {
+      alert(`Error al eliminar plantilla: ${err.message || err}`);
+    }
+  };
+
+  const handleOpenCopyWeek = () => {
+    setCopyTargetWeekOffset(1);
+    setCopyMode('replace');
+    setShowCopyWeekModal(true);
+  };
+
+  const handleExecuteCopyWeek = async () => {
+    setIsCopyingWeek(true);
+    try {
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const targetMonday = new Date(now);
+      targetMonday.setDate(now.getDate() + diffToMonday + ((weekOffset + copyTargetWeekOffset) * 7));
+      const targetStartDate = targetMonday.toISOString().split('T')[0];
+
+      await apiRequest('/meal-plans/copy-week', {
+        method: 'POST',
+        body: JSON.stringify({
+          source_start_date: weekDays[0].isoDate,
+          target_start_date: targetStartDate,
+          mode: copyMode
+        })
+      });
+      alert('¡Semana copiada con éxito! Navega a la semana destino para verla o modificarla.');
+      setShowCopyWeekModal(false);
+      await fetchPlans();
+    } catch (err: any) {
+      alert(`Error al copiar semana: ${err.message || err}`);
+    } finally {
+      setIsCopyingWeek(false);
+    }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -498,51 +713,99 @@ export const PlannerPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Week Navigator & Leftovers Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-sm">
-        {/* Navigation */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setWeekOffset(prev => prev - 1)}
-            className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:border-slate-300 text-slate-700 dark:text-zinc-300 transition-colors"
-            title="Semana anterior"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <span className="text-xs font-bold text-slate-900 dark:text-white px-2">
-            Semana {weekDays[0].displayDate} - {weekDays[6].displayDate}
-            {weekOffset === 0 && <span className="text-[10px] text-amber-500 font-semibold ml-1.5">(Actual)</span>}
-          </span>
-          <button
-            onClick={() => setWeekOffset(prev => prev + 1)}
-            className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:border-slate-300 text-slate-700 dark:text-zinc-300 transition-colors"
-            title="Semana siguiente"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-          {weekOffset !== 0 && (
+      {/* Week Navigator & Actions Toolbar */}
+      <div className="space-y-2">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-4 rounded-3xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-sm">
+          {/* Navigation */}
+          <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={() => setWeekOffset(0)}
-              className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline ml-1"
+              onClick={() => setWeekOffset(prev => prev - 1)}
+              className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:border-slate-300 text-slate-700 dark:text-zinc-300 transition-colors"
+              title="Semana anterior"
             >
-              Volver a hoy
+              <ChevronLeft className="w-4 h-4" />
             </button>
-          )}
+            <span className="text-xs font-bold text-slate-900 dark:text-white px-2">
+              Semana {weekDays[0].displayDate} - {weekDays[6].displayDate}
+              {weekOffset === 0 && <span className="text-[10px] text-amber-500 font-semibold ml-1.5">(Actual)</span>}
+            </span>
+            <button
+              onClick={() => setWeekOffset(prev => prev + 1)}
+              className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:border-slate-300 text-slate-700 dark:text-zinc-300 transition-colors"
+              title="Semana siguiente"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            {weekOffset !== 0 && (
+              <button
+                onClick={() => setWeekOffset(0)}
+                className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline ml-1"
+              >
+                Volver a hoy
+              </button>
+            )}
+          </div>
+
+          {/* Plantillas, Copiar Semana y Sobras */}
+          <div className="flex items-center gap-2 flex-wrap self-start lg:self-auto">
+            <button
+              type="button"
+              onClick={handleOpenSaveTemplate}
+              title="Guardar esta semana como plantilla reutilizable"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:border-amber-500/50 hover:bg-amber-500/5 text-slate-700 dark:text-zinc-300 font-semibold text-xs transition-colors"
+            >
+              <BookmarkPlus className="w-3.5 h-3.5 text-amber-500" />
+              <span>Guardar Plantilla</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenTemplatesModal}
+              title="Cargar una plantilla guardada a esta semana"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:border-sky-500/50 hover:bg-sky-500/5 text-slate-700 dark:text-zinc-300 font-semibold text-xs transition-colors"
+            >
+              <BookmarkCheck className="w-3.5 h-3.5 text-sky-500" />
+              <span>Plantillas Guardadas</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenCopyWeek}
+              title="Copiar todas las comidas de esta semana a otra semana"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 hover:border-purple-500/50 hover:bg-purple-500/5 text-slate-700 dark:text-zinc-300 font-semibold text-xs transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5 text-purple-500" />
+              <span>Copiar Semana</span>
+            </button>
+
+            <div className="h-4 w-px bg-slate-200 dark:bg-zinc-800 hidden sm:block" />
+
+            {/* Leftovers shortcut */}
+            <div className="flex items-center gap-2 pl-1">
+              <div className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400">
+                <Package className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Sobras: <strong>{leftovers.length}</strong></span>
+              </div>
+              <button
+                onClick={() => setShowLeftoverModal(true)}
+                className="text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" />
+                <span>Registrar</span>
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Leftovers shortcut */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-zinc-400">
-            <Package className="w-4 h-4 text-emerald-500" />
-            <span>Sobras en nevera: <strong>{leftovers.length}</strong></span>
+        {/* Tip bar for Drag and Drop */}
+        <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-800 dark:text-amber-300">
+          <div className="flex items-center gap-1.5">
+            <span className="font-bold">✨ Arrastrar y soltar:</span>
+            <span>Arrastra cualquier comida o receta entre días y horas, o pulsa <ArrowRightLeft className="w-3 h-3 inline mx-0.5" /> para moverla.</span>
           </div>
-          <button
-            onClick={() => setShowLeftoverModal(true)}
-            className="text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Registrar Sobra</span>
-          </button>
+          {isMovingItem && (
+            <span className="font-bold animate-pulse text-amber-600 dark:text-amber-400">Moviendo plato...</span>
+          )}
         </div>
       </div>
 
@@ -618,11 +881,31 @@ export const PlannerPage: React.FC = () => {
                   {MEAL_TYPES.map(meal => {
                     const items = getSlotItems(day.isoDate, meal.id);
                     const MealIcon = meal.icon;
+                    const isOver = dragOverSlot?.date === day.isoDate && dragOverSlot?.mealType === meal.id;
 
                     return (
                       <div
                         key={meal.id}
-                        className="p-2.5 rounded-2xl bg-slate-50/80 dark:bg-zinc-950/60 border border-slate-100 dark:border-zinc-800/80 space-y-1.5"
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                        }}
+                        onDragEnter={(e) => {
+                          e.preventDefault();
+                          setDragOverSlot({ date: day.isoDate, mealType: meal.id });
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          if (dragOverSlot?.date === day.isoDate && dragOverSlot?.mealType === meal.id) {
+                            setDragOverSlot(null);
+                          }
+                        }}
+                        onDrop={(e) => handleDropItem(e, day.isoDate, meal.id)}
+                        className={`p-2.5 rounded-2xl transition-all space-y-1.5 ${
+                          isOver
+                            ? 'bg-amber-500/15 border-2 border-amber-500 ring-4 ring-amber-500/20 scale-[1.01]'
+                            : 'bg-slate-50/80 dark:bg-zinc-950/60 border border-slate-100 dark:border-zinc-800/80'
+                        }`}
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
@@ -645,45 +928,75 @@ export const PlannerPage: React.FC = () => {
                         {/* Items in Slot */}
                         {items.length > 0 ? (
                           <div className="space-y-1 pt-0.5">
-                            {items.map((it: any) => (
-                              <div
-                                key={it.id}
-                                className="flex items-center justify-between p-2 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200/80 dark:border-zinc-800 text-xs shadow-2xs group"
-                              >
-                                <div className="pr-2 flex-1 min-w-0">
-                                  <span className="font-semibold text-slate-800 dark:text-zinc-200 block truncate">
-                                    {it.recipe_title || it.custom_recipe_name}
-                                  </span>
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    {it.calories && (
-                                      <span className="text-[10px] font-mono font-bold text-amber-600 dark:text-amber-400">
-                                        🔥 {it.calories} kcal
+                            {items.map((it: any) => {
+                              const isThisDragged = draggedItem?.id === it.id;
+                              return (
+                                <div
+                                  key={it.id}
+                                  draggable={true}
+                                  onDragStart={(e) => handleDragStart(e, it, day.isoDate, meal.id)}
+                                  onDragEnd={() => {
+                                    setDraggedItem(null);
+                                    setDragOverSlot(null);
+                                  }}
+                                  className={`flex items-center justify-between p-2 rounded-xl bg-white dark:bg-zinc-900 border text-xs shadow-2xs group cursor-grab active:cursor-grabbing transition-all select-none ${
+                                    isThisDragged
+                                      ? 'opacity-30 scale-95 border-amber-500 ring-2 ring-amber-500/30'
+                                      : 'border-slate-200/80 dark:border-zinc-800 hover:border-amber-400/50'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-1.5 pr-2 flex-1 min-w-0">
+                                    <GripVertical className="w-3.5 h-3.5 text-slate-300 dark:text-zinc-600 group-hover:text-amber-500 shrink-0 cursor-grab" />
+                                    <div className="min-w-0 flex-1">
+                                      <span className="font-semibold text-slate-800 dark:text-zinc-200 block truncate">
+                                        {it.recipe_title || it.custom_recipe_name}
                                       </span>
-                                    )}
-                                    <span className="text-[10px] text-slate-400 dark:text-zinc-500">
-                                      ({it.servings} rac.)
-                                    </span>
+                                      <div className="flex items-center gap-2 mt-0.5">
+                                        {it.calories && (
+                                          <span className="text-[10px] font-mono font-bold text-amber-600 dark:text-amber-400">
+                                            🔥 {it.calories} kcal
+                                          </span>
+                                        )}
+                                        <span className="text-[10px] text-slate-400 dark:text-zinc-500">
+                                          ({it.servings} rac.)
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenQuickMove(it, day.isoDate, meal.id)}
+                                      className="p-1 text-slate-400 hover:text-amber-500 opacity-60 group-hover:opacity-100 transition-opacity"
+                                      title="Mover a otro día u hora"
+                                    >
+                                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeletePlanned(it.id)}
+                                      className="p-1 text-slate-400 hover:text-rose-500 opacity-60 group-hover:opacity-100 transition-opacity"
+                                      title="Eliminar del menú"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
                                   </div>
                                 </div>
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeletePlanned(it.id)}
-                                  className="p-1 text-slate-400 hover:text-rose-500 opacity-60 group-hover:opacity-100 transition-opacity"
-                                  title="Eliminar del menú"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         ) : (
                           <button
                             type="button"
                             onClick={() => handleOpenAddModal(day.isoDate, meal.id)}
-                            className="w-full py-1.5 text-center text-[11px] text-slate-400 dark:text-zinc-600 hover:text-amber-500 hover:bg-amber-500/5 rounded-xl border border-dashed border-slate-200 dark:border-zinc-800/80 transition-colors"
+                            className={`w-full py-1.5 text-center text-[11px] rounded-xl border border-dashed transition-all ${
+                              isOver
+                                ? 'text-amber-600 dark:text-amber-400 border-amber-500 font-bold bg-amber-500/10'
+                                : 'text-slate-400 dark:text-zinc-600 hover:text-amber-500 hover:bg-amber-500/5 border-slate-200 dark:border-zinc-800/80'
+                            }`}
                           >
-                            + Añadir alimento / receta
+                            {isOver ? 'Soltar aquí para mover' : '+ Añadir alimento / receta'}
                           </button>
                         )}
                       </div>
@@ -1465,6 +1778,315 @@ export const PlannerPage: React.FC = () => {
               </div>
             )}
 
+          </div>
+        </div>
+      )}
+
+      {/* Save Template Modal */}
+      {showSaveTemplateModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <BookmarkPlus className="w-5 h-5 text-amber-500" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Guardar Semana como Plantilla</h3>
+              </div>
+              <button
+                onClick={() => setShowSaveTemplateModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
+              Guarda el menú de esta semana ({weekDays[0].displayDate} - {weekDays[6].displayDate}) como una plantilla reutilizable para aplicarla cuando quieras a cualquier otra semana.
+            </p>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Nombre de la Plantilla</label>
+              <input
+                type="text"
+                value={templateTitle}
+                onChange={(e) => setTemplateTitle(e.target.value)}
+                placeholder="Ej: Menú Mediterráneo Equilibrado"
+                className="w-full mt-1 px-3.5 py-2.5 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setShowSaveTemplateModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveTemplate}
+                disabled={isSavingTemplate}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-md shadow-amber-500/20 transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                <span>{isSavingTemplate ? 'Guardando...' : 'Guardar Plantilla'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Templates List & Apply Modal */}
+      {showTemplatesModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl animate-in fade-in zoom-in-95 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-zinc-800 shrink-0">
+              <div className="flex items-center gap-2">
+                <BookmarkCheck className="w-5 h-5 text-sky-500" />
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">Plantillas de Menú Semanal</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+                    Aplica una plantilla a la semana visible ({weekDays[0].displayDate} - {weekDays[6].displayDate})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowTemplatesModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+              {isLoadingTemplates ? (
+                <div className="py-12 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
+                  <span>Cargando plantillas...</span>
+                </div>
+              ) : templatesList.length === 0 ? (
+                <div className="py-12 text-center text-xs text-slate-400 space-y-2">
+                  <BookmarkPlus className="w-8 h-8 text-slate-300 dark:text-zinc-700 mx-auto" />
+                  <p className="font-semibold text-sm">No tienes plantillas guardadas todavía.</p>
+                  <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                    Diseña o genera un menú semanal que te guste y pulsa en "Guardar Plantilla" para poder reutilizarlo cuando quieras.
+                  </p>
+                </div>
+              ) : (
+                templatesList.map(tpl => {
+                  const totalMeals = tpl.slots?.reduce((acc: number, s: any) => acc + (s.planned_recipes?.length || 0), 0) || 0;
+                  return (
+                    <div
+                      key={tpl.id}
+                      className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-1">
+                        <span className="font-bold text-slate-900 dark:text-white text-sm block">
+                          {tpl.title}
+                        </span>
+                        <div className="flex items-center gap-2 text-[11px] text-slate-400 dark:text-zinc-500">
+                          <span>{totalMeals} platos programados</span>
+                          <span>•</span>
+                          <span>{new Date(tpl.created_at).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleApplyTemplate(tpl.id, 'replace')}
+                          disabled={isApplyingTemplate}
+                          className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-xs transition-colors disabled:opacity-50"
+                        >
+                          Aplicar a esta semana
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTemplate(tpl.id)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 transition-colors"
+                          title="Eliminar plantilla"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowTemplatesModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Copy Week Modal */}
+      {showCopyWeekModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <Copy className="w-5 h-5 text-purple-500" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Copiar Menú Semanal</h3>
+              </div>
+              <button
+                onClick={() => setShowCopyWeekModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
+              Copia todas las comidas programadas de esta semana ({weekDays[0].displayDate} - {weekDays[6].displayDate}) directamente a otra semana futura.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Semana de Destino</label>
+                <select
+                  value={copyTargetWeekOffset}
+                  onChange={(e) => setCopyTargetWeekOffset(Number(e.target.value))}
+                  className="w-full mt-1 px-3.5 py-2.5 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-purple-500"
+                >
+                  <option value={1}>Semana siguiente (+1 semana)</option>
+                  <option value={2}>Dentro de 2 semanas (+2 semanas)</option>
+                  <option value={3}>Dentro de 3 semanas (+3 semanas)</option>
+                  <option value={4}>Dentro de 4 semanas (+4 semanas)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Modo de Copia</label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCopyMode('replace')}
+                    className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
+                      copyMode === 'replace'
+                        ? 'border-purple-500 bg-purple-500/10 text-purple-600 dark:text-purple-400 font-bold ring-1 ring-purple-500'
+                        : 'border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400'
+                    }`}
+                  >
+                    <span className="block font-bold">Sustituir destino</span>
+                    <span className="text-[10px] font-normal opacity-70 block mt-0.5">Limpia la semana destino y coloca estas comidas</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCopyMode('merge')}
+                    className={`p-2.5 rounded-xl border text-left text-xs transition-all ${
+                      copyMode === 'merge'
+                        ? 'border-purple-500 bg-purple-500/10 text-purple-600 dark:text-purple-400 font-bold ring-1 ring-purple-500'
+                        : 'border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400'
+                    }`}
+                  >
+                    <span className="block font-bold">Añadir a destino</span>
+                    <span className="text-[10px] font-normal opacity-70 block mt-0.5">Conserva lo existente y añade estas comidas</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setShowCopyWeekModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteCopyWeek}
+                disabled={isCopyingWeek}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white shadow-md shadow-purple-600/20 transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>{isCopyingWeek ? 'Copiando...' : 'Copiar Menú'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Move Item Modal */}
+      {movingItem && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-amber-500" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Mover Comida</h3>
+              </div>
+              <button
+                onClick={() => setMovingItem(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
+              Mover <span className="font-bold text-slate-900 dark:text-white">"{movingItem.title}"</span> a otro día u horario:
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Día de Destino</label>
+                <select
+                  value={moveTargetDate}
+                  onChange={(e) => setMoveTargetDate(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+                >
+                  {weekDays.map(d => (
+                    <option key={d.isoDate} value={d.isoDate}>
+                      {d.name} ({d.displayDate})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-700 dark:text-zinc-300">Momento / Horario</label>
+                <select
+                  value={moveTargetMealType}
+                  onChange={(e) => setMoveTargetMealType(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+                >
+                  {MEAL_TYPES.map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-3 border-t border-slate-100 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setMovingItem(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteQuickMove}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-md shadow-amber-500/20 transition-all flex items-center gap-1.5"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+                <span>Mover Plato</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

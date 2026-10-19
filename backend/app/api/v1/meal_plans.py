@@ -15,7 +15,8 @@ from app.schemas.meal_plan import (
     AiMenuGenerateRequest, LeftoverCreate, LeftoverResponse,
     NutritionPlanParsedResponse, ApplyNutritionPlanRequest,
     NutritionPlanDay, NutritionPlanMeal, NutritionPlanIngredient, NutritionPlanStep,
-    PlannedRecipeResponse, MealSlotResponse
+    PlannedRecipeResponse, MealSlotResponse,
+    MovePlannedRecipeRequest, SaveTemplateRequest, ApplyTemplateRequest, CopyWeekRequest
 )
 from app.api.deps import get_current_user, get_current_household
 from app.services.gemini_service import gemini_service
@@ -74,10 +75,14 @@ def _format_plan_response(plan: MealPlan, db: Session) -> MealPlanResponse:
 
 @router.get("", response_model=List[MealPlanResponse])
 def list_meal_plans(
+    include_templates: bool = False,
     household: Household = Depends(get_current_household),
     db: Session = Depends(get_db)
 ):
-    plans = db.query(MealPlan).filter(MealPlan.household_id == household.id).order_by(MealPlan.start_date.desc()).all()
+    query = db.query(MealPlan).filter(MealPlan.household_id == household.id)
+    if not include_templates:
+        query = query.filter(MealPlan.is_template == False)
+    plans = query.order_by(MealPlan.start_date.desc()).all()
     return [_format_plan_response(p, db) for p in plans]
 
 
@@ -224,6 +229,325 @@ def delete_planned_recipe(
         db.commit()
 
     return {"message": "Elemento eliminado correctamente del menú"}
+
+
+@router.post("/move-item")
+def move_planned_recipe_item(
+    req: MovePlannedRecipeRequest,
+    household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    planned = db.query(PlannedRecipe).join(MealSlot).join(MealPlan).filter(
+        PlannedRecipe.id == req.planned_recipe_id,
+        MealPlan.household_id == household.id
+    ).first()
+    if not planned:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Elemento no encontrado")
+
+    old_slot_id = planned.meal_slot_id
+    old_slot = db.query(MealSlot).filter(MealSlot.id == old_slot_id).first()
+
+    # Si ya está en la misma fecha y tipo de comida, no hay nada que mover
+    if old_slot and old_slot.slot_date == req.target_date and old_slot.meal_type == req.target_meal_type:
+        return {"success": True, "message": "El elemento ya se encuentra en esa posición", "new_slot_id": old_slot_id}
+
+    # Buscar el plan que cubre la fecha destino
+    target_plan = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date <= req.target_date,
+        MealPlan.end_date >= req.target_date,
+        MealPlan.is_template == False
+    ).first()
+
+    if not target_plan:
+        weekday = req.target_date.weekday()
+        monday = req.target_date - timedelta(days=weekday)
+        sunday = monday + timedelta(days=6)
+        target_plan = MealPlan(
+            household_id=household.id,
+            title=f"Semana ({monday.strftime('%d/%m')} - {sunday.strftime('%d/%m')})",
+            start_date=monday,
+            end_date=sunday,
+            is_template=False,
+            created_by_id=current_user.id
+        )
+        db.add(target_plan)
+        db.flush()
+
+    # Buscar o crear el slot destino
+    target_slot = db.query(MealSlot).filter(
+        MealSlot.meal_plan_id == target_plan.id,
+        MealSlot.slot_date == req.target_date,
+        MealSlot.meal_type == req.target_meal_type
+    ).first()
+
+    if not target_slot:
+        target_slot = MealSlot(
+            meal_plan_id=target_plan.id,
+            slot_date=req.target_date,
+            meal_type=req.target_meal_type,
+            servings=planned.servings
+        )
+        db.add(target_slot)
+        db.flush()
+
+    # Reasignar la receta planificada al nuevo slot
+    planned.meal_slot_id = target_slot.id
+    db.flush()
+
+    # Limpiar el slot origen si quedó vacío
+    remaining = db.query(PlannedRecipe).filter(PlannedRecipe.meal_slot_id == old_slot_id).count()
+    if remaining == 0:
+        db.query(MealSlot).filter(MealSlot.id == old_slot_id).delete()
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Elemento movido a {req.target_meal_type} del {req.target_date.strftime('%d/%m')}",
+        "new_slot_id": target_slot.id
+    }
+
+
+@router.get("/templates", response_model=List[MealPlanResponse])
+def list_meal_plan_templates(
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    templates = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.is_template == True
+    ).order_by(MealPlan.created_at.desc()).all()
+    return [_format_plan_response(t, db) for t in templates]
+
+
+@router.post("/save-template", response_model=MealPlanResponse)
+def save_meal_plan_as_template(
+    req: SaveTemplateRequest,
+    household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    source_plan = None
+    if req.plan_id:
+        source_plan = db.query(MealPlan).filter(MealPlan.id == req.plan_id, MealPlan.household_id == household.id).first()
+    elif req.source_start_date:
+        source_plan = db.query(MealPlan).filter(
+            MealPlan.household_id == household.id,
+            MealPlan.start_date <= req.source_start_date,
+            MealPlan.end_date >= req.source_start_date,
+            MealPlan.is_template == False
+        ).first()
+
+    if not source_plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No se encontró el menú semanal para guardar como plantilla")
+
+    ref_start = date(2000, 1, 3)  # Lunes base de referencia
+    template = MealPlan(
+        household_id=household.id,
+        title=req.title.strip() if req.title.strip() else f"Plantilla {source_plan.title}",
+        start_date=ref_start,
+        end_date=ref_start + timedelta(days=6),
+        is_template=True,
+        created_by_id=current_user.id
+    )
+    db.add(template)
+    db.flush()
+
+    for s in source_plan.slots:
+        offset_days = (s.slot_date - source_plan.start_date).days % 7
+        tpl_slot_date = ref_start + timedelta(days=offset_days)
+        new_slot = MealSlot(
+            meal_plan_id=template.id,
+            slot_date=tpl_slot_date,
+            meal_type=s.meal_type,
+            servings=s.servings,
+            notes=s.notes
+        )
+        db.add(new_slot)
+        db.flush()
+        for p in s.planned_recipes:
+            db.add(PlannedRecipe(
+                meal_slot_id=new_slot.id,
+                recipe_id=p.recipe_id,
+                custom_recipe_name=p.custom_recipe_name,
+                custom_calories=p.custom_calories,
+                servings=p.servings
+            ))
+
+    db.commit()
+    db.refresh(template)
+    return _format_plan_response(template, db)
+
+
+@router.post("/apply-template", response_model=MealPlanResponse)
+def apply_meal_plan_template(
+    req: ApplyTemplateRequest,
+    household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    template = db.query(MealPlan).filter(
+        MealPlan.id == req.template_id,
+        MealPlan.household_id == household.id,
+        MealPlan.is_template == True
+    ).first()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plantilla no encontrada")
+
+    target_start = req.target_start_date
+    target_end = target_start + timedelta(days=6)
+
+    target_plan = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date == target_start,
+        MealPlan.end_date == target_end,
+        MealPlan.is_template == False
+    ).first()
+
+    if not target_plan:
+        target_plan = MealPlan(
+            household_id=household.id,
+            title=f"Semana ({target_start.strftime('%d/%m')} - {target_end.strftime('%d/%m')})",
+            start_date=target_start,
+            end_date=target_end,
+            is_template=False,
+            created_by_id=current_user.id
+        )
+        db.add(target_plan)
+        db.flush()
+
+    if req.mode == "replace":
+        db.query(MealSlot).filter(MealSlot.meal_plan_id == target_plan.id).delete()
+        db.flush()
+
+    for s in template.slots:
+        offset_days = (s.slot_date - template.start_date).days % 7
+        actual_date = target_start + timedelta(days=offset_days)
+        slot = db.query(MealSlot).filter(
+            MealSlot.meal_plan_id == target_plan.id,
+            MealSlot.slot_date == actual_date,
+            MealSlot.meal_type == s.meal_type
+        ).first()
+
+        if not slot:
+            slot = MealSlot(
+                meal_plan_id=target_plan.id,
+                slot_date=actual_date,
+                meal_type=s.meal_type,
+                servings=s.servings,
+                notes=s.notes
+            )
+            db.add(slot)
+            db.flush()
+
+        for p in s.planned_recipes:
+            db.add(PlannedRecipe(
+                meal_slot_id=slot.id,
+                recipe_id=p.recipe_id,
+                custom_recipe_name=p.custom_recipe_name,
+                custom_calories=p.custom_calories,
+                servings=p.servings
+            ))
+
+    db.commit()
+    db.refresh(target_plan)
+    return _format_plan_response(target_plan, db)
+
+
+@router.post("/copy-week", response_model=MealPlanResponse)
+def copy_week_meal_plan(
+    req: CopyWeekRequest,
+    household: Household = Depends(get_current_household),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    source_plan = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date <= req.source_start_date,
+        MealPlan.end_date >= req.source_start_date,
+        MealPlan.is_template == False
+    ).first()
+    if not source_plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No se encontró el menú de la semana origen")
+
+    target_start = req.target_start_date
+    target_end = target_start + timedelta(days=6)
+
+    target_plan = db.query(MealPlan).filter(
+        MealPlan.household_id == household.id,
+        MealPlan.start_date == target_start,
+        MealPlan.end_date == target_end,
+        MealPlan.is_template == False
+    ).first()
+
+    if not target_plan:
+        target_plan = MealPlan(
+            household_id=household.id,
+            title=f"Semana ({target_start.strftime('%d/%m')} - {target_end.strftime('%d/%m')})",
+            start_date=target_start,
+            end_date=target_end,
+            is_template=False,
+            created_by_id=current_user.id
+        )
+        db.add(target_plan)
+        db.flush()
+
+    if req.mode == "replace":
+        db.query(MealSlot).filter(MealSlot.meal_plan_id == target_plan.id).delete()
+        db.flush()
+
+    for s in source_plan.slots:
+        offset_days = (s.slot_date - source_plan.start_date).days % 7
+        actual_date = target_start + timedelta(days=offset_days)
+        slot = db.query(MealSlot).filter(
+            MealSlot.meal_plan_id == target_plan.id,
+            MealSlot.slot_date == actual_date,
+            MealSlot.meal_type == s.meal_type
+        ).first()
+
+        if not slot:
+            slot = MealSlot(
+                meal_plan_id=target_plan.id,
+                slot_date=actual_date,
+                meal_type=s.meal_type,
+                servings=s.servings,
+                notes=s.notes
+            )
+            db.add(slot)
+            db.flush()
+
+        for p in s.planned_recipes:
+            db.add(PlannedRecipe(
+                meal_slot_id=slot.id,
+                recipe_id=p.recipe_id,
+                custom_recipe_name=p.custom_recipe_name,
+                custom_calories=p.custom_calories,
+                servings=p.servings
+            ))
+
+    db.commit()
+    db.refresh(target_plan)
+    return _format_plan_response(target_plan, db)
+
+
+@router.delete("/templates/{template_id}")
+def delete_meal_plan_template(
+    template_id: int,
+    household: Household = Depends(get_current_household),
+    db: Session = Depends(get_db)
+):
+    template = db.query(MealPlan).filter(
+        MealPlan.id == template_id,
+        MealPlan.household_id == household.id,
+        MealPlan.is_template == True
+    ).first()
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plantilla no encontrada")
+
+    db.delete(template)
+    db.commit()
+    return {"success": True, "message": "Plantilla eliminada correctamente"}
 
 
 @router.post("/generate-ai")

@@ -61,6 +61,30 @@ class AddRecipeToSlotRequest(BaseModel):
     servings: int = 4
 
 
+class MovePlannedRecipeRequest(BaseModel):
+    planned_recipe_id: int
+    target_date: date
+    target_meal_type: str
+
+
+class SaveTemplateRequest(BaseModel):
+    plan_id: Optional[int] = None
+    source_start_date: Optional[date] = None
+    title: str
+
+
+class ApplyTemplateRequest(BaseModel):
+    template_id: int
+    target_start_date: date
+    mode: str = "replace"  # replace | merge
+
+
+class CopyWeekRequest(BaseModel):
+    source_start_date: date
+    target_start_date: date
+    mode: str = "replace"  # replace | merge
+
+
 class AiMenuGenerateRequest(BaseModel):
     start_date: date
     end_date: date
